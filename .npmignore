@@ -1,0 +1,38 @@
+# Test files
+*.test.ts
+*.test.js
+*.spec.ts
+*.spec.js
+test/
+tests/
+__tests__/
+
+# Documentation source
+docs/
+*.md
+!README.md
+
+# Development files
+.github/
+.vscode/
+.idea/
+*.log
+tsconfig.json
+
+# CI/CD
+.travis.yml
+.circleci/
+.gitlab-ci.yml
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Examples
+examples/
+demo/
+
+# Source control
+.hg/
+.svn/
