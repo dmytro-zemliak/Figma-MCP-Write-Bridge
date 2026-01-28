@@ -478,7 +478,7 @@ server.registerTool("set_auto_layout", {
     paddingLeft: z.number().optional(),
     primaryAxisAlignItems: z.enum(["MIN", "CENTER", "MAX", "SPACE_BETWEEN"]).optional(),
     counterAxisAlignItems: z.enum(["MIN", "CENTER", "MAX"]).optional(),
-    layoutWrap: z.boolean().optional(),
+    layoutWrap: z.enum(["NO_WRAP", "WRAP"]).optional(),
     counterAxisSpacing: z.number().optional(),
     layoutPositioning: z.enum(["AUTO", "ABSOLUTE"]).optional()
   }
