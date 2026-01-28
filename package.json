@@ -1,6 +1,6 @@
 {
   "name": "mcp-figma-toolkit",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "MCP server that enables AI agents to manipulate Figma documents - create shapes, text, styles, components, variables, and more",
   "type": "module",
   "main": "dist/server.js",
