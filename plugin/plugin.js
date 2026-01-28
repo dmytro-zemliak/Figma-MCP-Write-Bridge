@@ -229,7 +229,8 @@ function createStar({ points, width, height, x = 0, y = 0, hex, parentId }) {
 async function addText({ text, x = 0, y = 0, fontFamily = "Inter", fontStyle = "Regular", fontSize = 32, parentId }) {
   await figma.loadFontAsync({ family: fontFamily, style: fontStyle });
   const t = figma.createText();
-  t.characters = text; t.fontName = { family: fontFamily, style: fontStyle };
+  t.fontName = { family: fontFamily, style: fontStyle };
+  t.characters = text;
   if (fontSize) t.fontSize = fontSize;
   t.x = x; t.y = y; getParent(parentId).appendChild(t);
   return { nodeId: t.id, type: t.type, text: t.characters };
