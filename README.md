@@ -230,10 +230,16 @@ If you prefer not to install globally:
 | `get_selection` | Get current selection |
 | `rename_node` | Rename a node |
 | `delete_node` | Delete a node |
-| `duplicate_node` | Duplicate a node |
+| `duplicate_node` | Duplicate a node (optionally to different parent) |
 | `resize_node` | Resize a node |
 | `rotate_node` | Rotate a node |
-| `set_position` | Set position |
+| `set_position` | Set position within current parent |
+| `move_to_parent` | Move node to a different parent container |
+| `reorder_node` | Change z-order/stacking among siblings |
+| `get_node_info` | Get detailed node info (parent, bounds, children) |
+| `set_visibility` | Show or hide a node |
+| `set_locked` | Lock or unlock a node |
+| `flatten_node` | Flatten to single vector shape |
 | `group_nodes` | Group nodes |
 | `ungroup` | Ungroup |
 | `create_page` | Create a page |

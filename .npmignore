@@ -11,6 +11,7 @@ __tests__/
 docs/
 *.md
 !README.md
+!AGENTS.md
 
 # Development files
 .github/
@@ -36,3 +37,9 @@ demo/
 # Source control
 .hg/
 .svn/
+
+# AI contributor instructions (not for package users)
+AI_INSTRUCTIONS.md
+CLAUDE.md
+.cursorrules
+.claude/

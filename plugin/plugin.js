@@ -105,6 +105,12 @@ async function handleAction(action, input) {
     case "resize_node": return resizeNode(input);
     case "rotate_node": return rotateNode(input);
     case "set_position": return setPosition(input);
+    case "move_to_parent": return moveToParent(input);
+    case "reorder_node": return reorderNode(input);
+    case "get_node_info": return getNodeInfo(input);
+    case "set_visibility": return setVisibility(input);
+    case "set_locked": return setLocked(input);
+    case "flatten_node": return flattenNode(input);
     case "group_nodes": return groupNodes(input);
     case "ungroup": return ungroup(input);
 
@@ -498,16 +504,183 @@ function setCurrentPage({ pageId }) {
 // ---------- Node management ----------
 function renameNode({ nodeId, name }) { const n = getNode(nodeId); if ("name" in n) n.name = name; return { nodeId }; }
 function deleteNode({ nodeId }) { const n = getNode(nodeId); n.remove(); return { removed: nodeId }; }
-function duplicateNode({ nodeId, x, y }) {
-  const n = getNode(nodeId); const copy = n.clone();
+function duplicateNode({ nodeId, parentId, x, y }) {
+  const n = getNode(nodeId);
+  const copy = n.clone();
+
+  // Determine target parent
+  const targetParent = parentId ? getNode(parentId) : n.parent;
+  if (!targetParent) throw new Error("No valid parent for duplicate");
+  if (!("children" in targetParent)) throw new Error("Target parent cannot contain children");
+
+  // Add to target parent
+  targetParent.appendChild(copy);
+
+  // Set position if specified
   if (typeof x === "number") copy.x = x;
   if (typeof y === "number") copy.y = y;
-  n.parent && n.parent.appendChild(copy);
-  return { nodeId: copy.id };
+
+  return { nodeId: copy.id, parentId: targetParent.id };
 }
 function resizeNode({ nodeId, width, height }) { const n = getNode(nodeId); if (!("resize" in n)) throw new Error("Node cannot be resized"); n.resize(width, height); return { nodeId }; }
 function rotateNode({ nodeId, rotation }) { const n = getNode(nodeId); if (!("rotation" in n)) throw new Error("No rotation on node"); n.rotation = rotation; return { nodeId }; }
 function setPosition({ nodeId, x, y }) { const n = getNode(nodeId); if (!("x" in n && "y" in n)) throw new Error("Node not positionable"); n.x = x; n.y = y; return { nodeId }; }
+
+function moveToParent({ nodeId, parentId, index, x, y }) {
+  const node = getNode(nodeId);
+  const newParent = getNode(parentId);
+
+  // Check if parent can have children
+  if (!("children" in newParent)) {
+    throw new Error("Target parent cannot contain children. Must be a frame, group, component, or page.");
+  }
+
+  // Store absolute position before moving if we need to preserve it
+  const oldAbsoluteX = node.absoluteTransform ? node.absoluteTransform[0][2] : 0;
+  const oldAbsoluteY = node.absoluteTransform ? node.absoluteTransform[1][2] : 0;
+
+  // Move node to new parent
+  if (typeof index === "number" && index >= 0) {
+    newParent.insertChild(Math.min(index, newParent.children.length), node);
+  } else {
+    newParent.appendChild(node);
+  }
+
+  // Set position within new parent if specified
+  if (typeof x === "number" && "x" in node) node.x = x;
+  if (typeof y === "number" && "y" in node) node.y = y;
+
+  return {
+    nodeId: node.id,
+    newParentId: newParent.id,
+    newParentName: "name" in newParent ? newParent.name : undefined
+  };
+}
+
+function reorderNode({ nodeId, index }) {
+  const node = getNode(nodeId);
+  const parent = node.parent;
+
+  if (!parent || !("children" in parent)) {
+    throw new Error("Node has no valid parent with children");
+  }
+
+  // Get current siblings
+  const siblings = parent.children;
+  const currentIndex = siblings.indexOf(node);
+
+  if (currentIndex === -1) throw new Error("Node not found in parent");
+
+  // Calculate target index
+  let targetIndex;
+  if (index < 0) {
+    // Negative index: count from end (-1 = last, -2 = second to last)
+    targetIndex = Math.max(0, siblings.length + index);
+  } else {
+    targetIndex = Math.min(index, siblings.length - 1);
+  }
+
+  // Move to new position using insertChild
+  if (targetIndex !== currentIndex) {
+    parent.insertChild(targetIndex, node);
+  }
+
+  return {
+    nodeId: node.id,
+    oldIndex: currentIndex,
+    newIndex: parent.children.indexOf(node)
+  };
+}
+
+function getNodeInfo({ nodeId }) {
+  const node = getNode(nodeId);
+
+  const info = {
+    id: node.id,
+    type: node.type,
+    name: "name" in node ? node.name : undefined
+  };
+
+  // Position and size
+  if ("x" in node) info.x = node.x;
+  if ("y" in node) info.y = node.y;
+  if ("width" in node) info.width = node.width;
+  if ("height" in node) info.height = node.height;
+  if ("rotation" in node) info.rotation = node.rotation;
+
+  // Absolute position
+  if (node.absoluteTransform) {
+    info.absoluteX = node.absoluteTransform[0][2];
+    info.absoluteY = node.absoluteTransform[1][2];
+  }
+
+  // Parent info
+  if (node.parent) {
+    info.parentId = node.parent.id;
+    info.parentType = node.parent.type;
+    if ("name" in node.parent) info.parentName = node.parent.name;
+  }
+
+  // Children info (for containers)
+  if ("children" in node) {
+    info.childCount = node.children.length;
+    info.children = node.children.map(c => ({
+      id: c.id,
+      type: c.type,
+      name: "name" in c ? c.name : undefined
+    }));
+  }
+
+  // Index among siblings
+  if (node.parent && "children" in node.parent) {
+    info.indexInParent = node.parent.children.indexOf(node);
+    info.siblingCount = node.parent.children.length;
+  }
+
+  // Visibility and locked state
+  if ("visible" in node) info.visible = node.visible;
+  if ("locked" in node) info.locked = node.locked;
+
+  // Opacity
+  if ("opacity" in node) info.opacity = node.opacity;
+
+  return info;
+}
+
+function setVisibility({ nodeId, visible }) {
+  const node = getNode(nodeId);
+  if (!("visible" in node)) throw new Error("Node does not support visibility");
+  node.visible = visible;
+  return { nodeId, visible: node.visible };
+}
+
+function setLocked({ nodeId, locked }) {
+  const node = getNode(nodeId);
+  if (!("locked" in node)) throw new Error("Node does not support locking");
+  node.locked = locked;
+  return { nodeId, locked: node.locked };
+}
+
+function flattenNode({ nodeId }) {
+  const node = getNode(nodeId);
+
+  // Check if node can be flattened
+  if (!("type" in node)) throw new Error("Invalid node");
+
+  // flatten() works on most scene nodes
+  if (typeof figma.flatten !== "function") {
+    throw new Error("Flatten not available");
+  }
+
+  const flattened = figma.flatten([node]);
+
+  return {
+    nodeId: flattened.id,
+    type: flattened.type,
+    name: "name" in flattened ? flattened.name : undefined
+  };
+}
+
 function groupNodes({ nodeIds, name = "Group" }) {
   const nodes = nodeIds.map(getNode).filter(n => !!n && "visible" in n);
   if (nodes.length < 2) throw new Error("Need 2+ nodes");

@@ -1,14 +1,18 @@
-# Contributing to Figma MCP Write Bridge
+# Contributing to MCP Figma Toolkit
 
 Thank you for your interest in contributing! This document provides guidelines for contributing to the project.
+
+## AI Agent Instructions
+
+For AI coding agents (Claude, Copilot, Cursor), see `AI_INSTRUCTIONS.md` for detailed contributor guidelines.
 
 ## Getting Started
 
 1. **Fork the repository** on GitHub
 2. **Clone your fork** locally:
    ```bash
-   git clone https://github.com/yourusername/figma-mcp-write-bridge.git
-   cd figma-mcp-write-bridge
+   git clone https://github.com/yourusername/mcp-figma-toolkit.git
+   cd mcp-figma-toolkit
    ```
 3. **Install dependencies**:
    ```bash
@@ -78,15 +82,13 @@ npm start
 3. **Register the MCP tool** in `server.ts`:
 
    ```typescript
-   registerTool(
-     "my_new_tool",
-     z.object({
+   server.registerTool("my_new_tool", {
+     description: "Clear description of what this tool does for AI clients",
+     inputSchema: {
        requiredParam: z.string().describe("Description"),
        optionalParam: z.string().optional().describe("Optional param"),
-     }),
-     "Clear description of what this tool does for AI clients",
-     "my_new_feature"
-   );
+     }
+   }, async (input) => ok(await sendToPlugin("my_new_feature", input)));
    ```
 
 4. **Update documentation** in README.md

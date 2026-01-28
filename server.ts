@@ -5,6 +5,77 @@ import { z } from "zod";
 import { WebSocketServer, WebSocket } from "ws";
 import https from "https";
 import http from "http";
+import { readFileSync } from "fs";
+import { fileURLToPath } from "url";
+import { dirname, join } from "path";
+
+// ---------- CLI argument handling ----------
+const args = process.argv.slice(2);
+
+if (args.includes("--help") || args.includes("-h")) {
+  console.log(`
+MCP Figma Toolkit - AI-powered Figma design automation
+
+USAGE:
+  mcp-figma-toolkit              Start the MCP server
+  mcp-figma-toolkit --help       Show this help message
+  mcp-figma-toolkit --version    Show version number
+
+DESCRIPTION:
+  An MCP (Model Context Protocol) server that enables AI agents to
+  create and manipulate Figma designs programmatically.
+
+SETUP:
+  1. Configure your MCP client (Claude Code, VS Code, Cursor):
+
+     Claude Code (~/.claude.json):
+     {
+       "mcpServers": {
+         "figma": { "command": "mcp-figma-toolkit" }
+       }
+     }
+
+  2. Install the Figma plugin:
+     - Run: npm root -g
+     - In Figma: Plugins > Development > Import plugin from manifest
+     - Navigate to: <npm-path>/mcp-figma-toolkit/plugin/manifest.json
+
+  3. Start using:
+     - Open a Figma document
+     - Run the plugin: Plugins > Development > MCP Figma Toolkit
+     - The MCP server will connect automatically
+
+TOOLS:
+  77 tools available across categories:
+  - Creation: frames, shapes, text, images, vectors (SVG)
+  - Node Management: find, move, transform, reparent, z-order
+  - Styling: fills, strokes, gradients, effects
+  - Layout: Auto Layout, constraints
+  - Variables: design tokens, modes (Light/Dark)
+  - Styles: reusable text/effect styles
+  - Components: create, instance, variants
+
+DOCUMENTATION:
+  README.md  - Full documentation for users
+  AGENTS.md  - Instructions for AI agents
+
+MORE INFO:
+  https://github.com/dmytro-zemliak/mcp-figma-toolkit
+`);
+  process.exit(0);
+}
+
+if (args.includes("--version") || args.includes("-v")) {
+  try {
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = dirname(__filename);
+    const pkg = JSON.parse(readFileSync(join(__dirname, "..", "package.json"), "utf-8"));
+    console.log(pkg.version);
+  } catch {
+    console.log("1.0.2"); // Fallback version
+  }
+  process.exit(0);
+}
 
 // ---------- WebSocket bridge to the Figma plugin UI ----------
 const HOST = "127.0.0.1";
@@ -223,8 +294,15 @@ server.registerTool("rename_node", { description: "Rename a node.", inputSchema:
 server.registerTool("delete_node", { description: "Delete a node.", inputSchema: { nodeId: z.string() } },
   async (input) => ok(await sendToPlugin("delete_node", input)));
 
-server.registerTool("duplicate_node", { description: "Duplicate a node.", inputSchema: { nodeId: z.string(), x: z.number().optional(), y: z.number().optional() } },
-  async (input) => ok(await sendToPlugin("duplicate_node", input)));
+server.registerTool("duplicate_node", {
+  description: "Duplicate a node. Optionally duplicate into a different parent.",
+  inputSchema: {
+    nodeId: z.string(),
+    parentId: z.string().optional().describe("Target parent ID. If not specified, duplicates within same parent."),
+    x: z.number().optional(),
+    y: z.number().optional()
+  }
+}, async (input) => ok(await sendToPlugin("duplicate_node", input)));
 
 server.registerTool("resize_node", { description: "Resize a node.", inputSchema: { nodeId: z.string(), width: z.number().positive(), height: z.number().positive() } },
   async (input) => ok(await sendToPlugin("resize_node", input)));
@@ -232,8 +310,57 @@ server.registerTool("resize_node", { description: "Resize a node.", inputSchema:
 server.registerTool("rotate_node", { description: "Rotate a node (degrees).", inputSchema: { nodeId: z.string(), rotation: z.number() } },
   async (input) => ok(await sendToPlugin("rotate_node", input)));
 
-server.registerTool("set_position", { description: "Move a node to (x,y).", inputSchema: { nodeId: z.string(), x: z.number(), y: z.number() } },
+server.registerTool("set_position", { description: "Move a node to (x,y) within its current parent.", inputSchema: { nodeId: z.string(), x: z.number(), y: z.number() } },
   async (input) => ok(await sendToPlugin("set_position", input)));
+
+server.registerTool("move_to_parent", {
+  description: "Move a node to a different parent (frame, group, component, or page). Use this to reparent nodes.",
+  inputSchema: {
+    nodeId: z.string().describe("ID of the node to move"),
+    parentId: z.string().describe("ID of the new parent container"),
+    index: z.number().optional().describe("Position among siblings (0 = first, omit for last)"),
+    x: z.number().optional().describe("X position within new parent"),
+    y: z.number().optional().describe("Y position within new parent")
+  }
+}, async (input) => ok(await sendToPlugin("move_to_parent", input)));
+
+server.registerTool("reorder_node", {
+  description: "Change a node's z-order (stacking position) among its siblings within the same parent.",
+  inputSchema: {
+    nodeId: z.string().describe("ID of the node to reorder"),
+    index: z.number().describe("New position: 0 = bottom/back, -1 = top/front, or specific index")
+  }
+}, async (input) => ok(await sendToPlugin("reorder_node", input)));
+
+server.registerTool("get_node_info", {
+  description: "Get detailed information about a node including parent, position, size, children, and state.",
+  inputSchema: {
+    nodeId: z.string().describe("ID of the node to inspect")
+  }
+}, async (input) => ok(await sendToPlugin("get_node_info", input)));
+
+server.registerTool("set_visibility", {
+  description: "Show or hide a node.",
+  inputSchema: {
+    nodeId: z.string(),
+    visible: z.boolean().describe("true to show, false to hide")
+  }
+}, async (input) => ok(await sendToPlugin("set_visibility", input)));
+
+server.registerTool("set_locked", {
+  description: "Lock or unlock a node. Locked nodes cannot be selected or edited in Figma.",
+  inputSchema: {
+    nodeId: z.string(),
+    locked: z.boolean().describe("true to lock, false to unlock")
+  }
+}, async (input) => ok(await sendToPlugin("set_locked", input)));
+
+server.registerTool("flatten_node", {
+  description: "Flatten a node into a single vector shape. Useful for simplifying complex shapes or groups.",
+  inputSchema: {
+    nodeId: z.string().describe("ID of the node to flatten")
+  }
+}, async (input) => ok(await sendToPlugin("flatten_node", input)));
 
 server.registerTool("group_nodes", { description: "Group nodes.", inputSchema: { nodeIds: z.array(z.string()).min(2), name: z.string().optional() } },
   async (input) => ok(await sendToPlugin("group_nodes", input)));
