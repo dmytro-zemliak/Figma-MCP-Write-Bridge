@@ -1,6 +1,6 @@
-# AI Coding Agent Instructions for `figma-mcp-write-bridge`
+# AI Coding Agent Instructions for `mcp-figma-toolkit`
 
-Purpose: Provide a local Model Context Protocol (MCP) server that exposes write/manipulation tools for a running Figma document via a lightweight plugin bridge (WebSocket + stdio). Use these instructions to quickly understand architecture, patterns, and safe extension points.
+Purpose: Provide a Model Context Protocol (MCP) server that exposes write/manipulation tools for a running Figma document via a lightweight plugin bridge (WebSocket + stdio). Use these instructions to quickly understand architecture, patterns, and safe extension points.
 
 ## Big Picture Flow
 1. Host process runs `npm start` which executes `tsx server.ts` (see `package.json`).
