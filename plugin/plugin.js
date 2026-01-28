@@ -844,7 +844,9 @@ function setAutoLayout(input) {
   const props = Object.assign({}, input);
   delete props.nodeId;
   const f = getNode(nodeId);
-  if (f.type !== "FRAME") throw new Error("Auto Layout only on frames");
+  if (f.type !== "FRAME" && f.type !== "COMPONENT" && f.type !== "COMPONENT_SET") {
+    throw new Error("Auto Layout only on frames, components, and component sets");
+  }
   const map = {
     layoutMode: "layoutMode",
     primaryAxisSizingMode: "primaryAxisSizingMode",

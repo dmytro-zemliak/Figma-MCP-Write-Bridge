@@ -465,7 +465,7 @@ server.registerTool("layout_grid_clear", {
 
 // Auto Layout & Constraints
 server.registerTool("set_auto_layout", {
-  description: "Enable/configure Auto Layout on a frame.",
+  description: "Enable/configure Auto Layout on a frame, component, or component set.",
   inputSchema: {
     nodeId: z.string(),
     layoutMode: z.enum(["HORIZONTAL", "VERTICAL"]).optional(),
