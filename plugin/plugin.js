@@ -31,11 +31,49 @@ function assertFills(n) {
   if (!("fills" in n)) throw new Error("Node does not support fills");
 }
 function base64ToUint8Array(b64) {
-  const bin = atob(b64);
-  const len = bin.length;
-  const bytes = new Uint8Array(len);
-  for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
+  // Pure JS base64 decoder (atob not available in Figma plugin main context)
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  const lookup = new Uint8Array(256);
+  for (let i = 0; i < chars.length; i++) lookup[chars.charCodeAt(i)] = i;
+
+  // Remove padding and calculate output length
+  let padding = 0;
+  if (b64.endsWith("==")) padding = 2;
+  else if (b64.endsWith("=")) padding = 1;
+
+  const len = b64.length;
+  const bufferLength = Math.floor(len * 3 / 4) - padding;
+  const bytes = new Uint8Array(bufferLength);
+
+  let p = 0;
+  for (let i = 0; i < len; i += 4) {
+    const e1 = lookup[b64.charCodeAt(i)];
+    const e2 = lookup[b64.charCodeAt(i + 1)];
+    const e3 = lookup[b64.charCodeAt(i + 2)];
+    const e4 = lookup[b64.charCodeAt(i + 3)];
+
+    if (p < bufferLength) bytes[p++] = (e1 << 2) | (e2 >> 4);
+    if (p < bufferLength) bytes[p++] = ((e2 & 15) << 4) | (e3 >> 2);
+    if (p < bufferLength) bytes[p++] = ((e3 & 3) << 6) | e4;
+  }
   return bytes;
+}
+
+function uint8ArrayToBase64(bytes) {
+  // Pure JS base64 encoder (btoa not available in Figma plugin main context)
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  let result = "";
+  const len = bytes.length;
+  for (let i = 0; i < len; i += 3) {
+    const b1 = bytes[i];
+    const b2 = i + 1 < len ? bytes[i + 1] : 0;
+    const b3 = i + 2 < len ? bytes[i + 2] : 0;
+    result += chars[b1 >> 2];
+    result += chars[((b1 & 3) << 4) | (b2 >> 4)];
+    result += i + 1 < len ? chars[((b2 & 15) << 2) | (b3 >> 6)] : "=";
+    result += i + 2 < len ? chars[b3 & 63] : "=";
+  }
+  return result;
 }
 
 // ---------- Actions dispatcher ----------
@@ -50,6 +88,8 @@ async function handleAction(action, input) {
     case "create_star": return createStar(input);
     case "add_text": return addText(input);
     case "place_image_base64": return placeImageBase64(input);
+    case "create_vector": return createVector(input);
+    case "place_image_url": return placeImageUrl(input);
 
     // Selection / find / pages
     case "find_nodes": return findNodes(input);
@@ -76,6 +116,9 @@ async function handleAction(action, input) {
     case "set_blend_mode": return setBlendMode(input);
     case "add_effect": return addEffect(input);
     case "clear_effects": return clearEffects(input);
+    case "set_gradient_fill": return setGradientFill(input);
+    case "set_gradient_stroke": return setGradientStroke(input);
+    case "set_text_gradient": return setTextGradient(input);
     case "layout_grid_add": return layoutGridAdd(input);
     case "layout_grid_clear": return layoutGridClear(input);
 
@@ -100,68 +143,324 @@ async function handleAction(action, input) {
     case "get_plugin_data": return getPluginData(input);
     case "set_properties": return setProperties(input);
 
+    // Variables
+    case "create_variable_collection": return createVariableCollection(input);
+    case "create_variable": return createVariable(input);
+    case "get_local_variable_collections": return getLocalVariableCollections(input);
+    case "get_local_variables": return getLocalVariables(input);
+    case "set_variable_value": return setVariableValue(input);
+    case "bind_variable": return bindVariable(input);
+    case "unbind_variable": return unbindVariable(input);
+    case "delete_variable": return deleteVariable(input);
+    case "delete_variable_collection": return deleteVariableCollection(input);
+
+    // Styles
+    case "create_text_style": return createTextStyle(input);
+    case "create_effect_style": return createEffectStyle(input);
+    case "get_local_text_styles": return getLocalTextStyles(input);
+    case "get_local_effect_styles": return getLocalEffectStyles(input);
+    case "apply_text_style": return applyTextStyle(input);
+    case "apply_effect_style": return applyEffectStyle(input);
+    case "update_text_style": return updateTextStyle(input);
+    case "update_effect_style": return updateEffectStyle(input);
+    case "delete_style": return deleteStyle(input);
+
+    // Enhanced Components
+    case "create_component_from_node": return createComponentFromNode(input);
+    case "create_component_set": return createComponentSet(input);
+    case "add_component_property": return addComponentProperty(input);
+    case "set_instance_property": return setInstanceProperty(input);
+    case "get_component_properties": return getComponentProperties(input);
+
     default:
       throw new Error("Unknown action: " + action);
   }
 }
 
 // ---------- Create ----------
-function createFrame({ name = "Frame", width = 800, height = 600, x = 0, y = 0 }) {
+function getParent(parentId) {
+  if (!parentId) return page();
+  const parent = getNode(parentId);
+  if (!("appendChild" in parent)) throw new Error("Parent cannot contain children");
+  return parent;
+}
+
+function createFrame({ name = "Frame", width = 800, height = 600, x = 0, y = 0, parentId }) {
   const f = figma.createFrame();
   f.name = name; f.resize(width, height); f.x = x; f.y = y;
-  page().appendChild(f);
+  getParent(parentId).appendChild(f);
   return { nodeId: f.id, type: f.type, name: f.name, width, height };
 }
-function createRectangle({ width, height, x = 0, y = 0, cornerRadius, hex }) {
+function createRectangle({ width, height, x = 0, y = 0, cornerRadius, hex, parentId }) {
   const r = figma.createRectangle(); r.resize(width, height);
   if (typeof cornerRadius === "number") r.cornerRadius = cornerRadius;
   if (hex) r.fills = [{ type: "SOLID", color: hexToRGB(hex) }];
-  r.x = x; r.y = y; page().appendChild(r);
+  r.x = x; r.y = y; getParent(parentId).appendChild(r);
   return { nodeId: r.id, type: r.type };
 }
-function createEllipse({ width, height, x = 0, y = 0, hex }) {
+function createEllipse({ width, height, x = 0, y = 0, hex, parentId }) {
   const e = figma.createEllipse(); e.resize(width, height);
   if (hex) e.fills = [{ type: "SOLID", color: hexToRGB(hex) }];
-  e.x = x; e.y = y; page().appendChild(e);
+  e.x = x; e.y = y; getParent(parentId).appendChild(e);
   return { nodeId: e.id, type: e.type };
 }
-function createLine({ x = 0, y = 0, length, rotation = 0, strokeHex = "#111827", strokeWeight = 1 }) {
+function createLine({ x = 0, y = 0, length, rotation = 0, strokeHex = "#111827", strokeWeight = 1, parentId }) {
   const l = figma.createLine();
   l.x = x; l.y = y; l.rotation = rotation;
   l.strokes = [{ type: "SOLID", color: hexToRGB(strokeHex) }];
   l.strokeWeight = strokeWeight;
   // Figma line length controlled via vector network — easiest: resize in x.
   l.resize(length, 0);
-  page().appendChild(l);
+  getParent(parentId).appendChild(l);
   return { nodeId: l.id, type: l.type };
 }
-function createPolygon({ sides, width, height, x = 0, y = 0, hex }) {
+function createPolygon({ sides, width, height, x = 0, y = 0, hex, parentId }) {
   const p = figma.createPolygon(); p.pointCount = sides; p.resize(width, height);
   if (hex) p.fills = [{ type: "SOLID", color: hexToRGB(hex) }];
-  p.x = x; p.y = y; page().appendChild(p);
+  p.x = x; p.y = y; getParent(parentId).appendChild(p);
   return { nodeId: p.id, type: p.type };
 }
-function createStar({ points, width, height, x = 0, y = 0, hex }) {
+function createStar({ points, width, height, x = 0, y = 0, hex, parentId }) {
   const s = figma.createStar(); s.pointCount = points; s.resize(width, height);
   if (hex) s.fills = [{ type: "SOLID", color: hexToRGB(hex) }];
-  s.x = x; s.y = y; page().appendChild(s);
+  s.x = x; s.y = y; getParent(parentId).appendChild(s);
   return { nodeId: s.id, type: s.type };
 }
-async function addText({ text, x = 0, y = 0, fontFamily = "Inter", fontStyle = "Regular", fontSize = 32 }) {
+async function addText({ text, x = 0, y = 0, fontFamily = "Inter", fontStyle = "Regular", fontSize = 32, parentId }) {
   await figma.loadFontAsync({ family: fontFamily, style: fontStyle });
   const t = figma.createText();
   t.characters = text; t.fontName = { family: fontFamily, style: fontStyle };
   if (fontSize) t.fontSize = fontSize;
-  t.x = x; t.y = y; page().appendChild(t);
+  t.x = x; t.y = y; getParent(parentId).appendChild(t);
   return { nodeId: t.id, type: t.type, text: t.characters };
 }
-function placeImageBase64({ width, height, x = 0, y = 0, base64 }) {
+function placeImageBase64({ width, height, x = 0, y = 0, base64, parentId }) {
   const bytes = base64ToUint8Array(base64);
   const image = figma.createImage(bytes);
   const r = figma.createRectangle(); r.resize(width, height); r.x = x; r.y = y;
   r.fills = [{ type: "IMAGE", imageHash: image.hash, scaleMode: "FILL" }];
-  page().appendChild(r);
+  getParent(parentId).appendChild(r);
   return { nodeId: r.id, type: r.type };
+}
+
+// Convert SVG path to Figma's vectorPaths API format
+// vectorPaths API supports: M, L, C, Q, Z (and H, V converted to L)
+// vectorPaths API does NOT support: A (arc), S (smooth curve), T (smooth quadratic)
+// This function converts relative to absolute AND converts S→C, T→Q
+// Arc (A) commands throw an error - use svgString parameter instead for full SVG support
+function normalizePathToAbsolute(pathData) {
+  const cmdRegex = /([MmLlHhVvCcSsQqTtAaZz])([^MmLlHhVvCcSsQqTtAaZz]*)/g;
+  const numRegex = /-?[\d.]+(?:e[+-]?\d+)?/gi;
+
+  let result = "";
+  let curX = 0, curY = 0;
+  let startX = 0, startY = 0;
+  // Track last control point for S and T commands
+  let lastCubicX2 = 0, lastCubicY2 = 0;
+  let lastQuadX1 = 0, lastQuadY1 = 0;
+  let lastCmd = '';
+
+  let match;
+  while ((match = cmdRegex.exec(pathData)) !== null) {
+    const cmd = match[1];
+    const argsStr = match[2];
+    const nums = argsStr.match(numRegex) || [];
+    const args = nums.map(Number);
+
+    const isRelative = cmd === cmd.toLowerCase();
+    const absCmd = cmd.toUpperCase();
+
+    switch (absCmd) {
+      case 'M':
+        for (let i = 0; i < args.length; i += 2) {
+          const x = isRelative ? curX + args[i] : args[i];
+          const y = isRelative ? curY + args[i + 1] : args[i + 1];
+          result += (i === 0 ? 'M ' : 'L ') + x + ' ' + y + ' ';
+          curX = x; curY = y;
+          if (i === 0) { startX = x; startY = y; }
+        }
+        lastCmd = 'M';
+        break;
+
+      case 'L':
+        for (let i = 0; i < args.length; i += 2) {
+          const x = isRelative ? curX + args[i] : args[i];
+          const y = isRelative ? curY + args[i + 1] : args[i + 1];
+          result += 'L ' + x + ' ' + y + ' ';
+          curX = x; curY = y;
+        }
+        lastCmd = 'L';
+        break;
+
+      case 'H':
+        for (let i = 0; i < args.length; i++) {
+          const x = isRelative ? curX + args[i] : args[i];
+          result += 'L ' + x + ' ' + curY + ' ';
+          curX = x;
+        }
+        lastCmd = 'H';
+        break;
+
+      case 'V':
+        for (let i = 0; i < args.length; i++) {
+          const y = isRelative ? curY + args[i] : args[i];
+          result += 'L ' + curX + ' ' + y + ' ';
+          curY = y;
+        }
+        lastCmd = 'V';
+        break;
+
+      case 'C':
+        for (let i = 0; i < args.length; i += 6) {
+          const x1 = isRelative ? curX + args[i] : args[i];
+          const y1 = isRelative ? curY + args[i + 1] : args[i + 1];
+          const x2 = isRelative ? curX + args[i + 2] : args[i + 2];
+          const y2 = isRelative ? curY + args[i + 3] : args[i + 3];
+          const x = isRelative ? curX + args[i + 4] : args[i + 4];
+          const y = isRelative ? curY + args[i + 5] : args[i + 5];
+          result += 'C ' + x1 + ' ' + y1 + ' ' + x2 + ' ' + y2 + ' ' + x + ' ' + y + ' ';
+          lastCubicX2 = x2; lastCubicY2 = y2;
+          curX = x; curY = y;
+        }
+        lastCmd = 'C';
+        break;
+
+      case 'S': // Smooth curve → Convert to C
+        for (let i = 0; i < args.length; i += 4) {
+          // First control point is reflection of last cubic's second control point
+          let x1, y1;
+          if (lastCmd === 'C' || lastCmd === 'S') {
+            x1 = 2 * curX - lastCubicX2;
+            y1 = 2 * curY - lastCubicY2;
+          } else {
+            x1 = curX;
+            y1 = curY;
+          }
+          const x2 = isRelative ? curX + args[i] : args[i];
+          const y2 = isRelative ? curY + args[i + 1] : args[i + 1];
+          const x = isRelative ? curX + args[i + 2] : args[i + 2];
+          const y = isRelative ? curY + args[i + 3] : args[i + 3];
+          result += 'C ' + x1 + ' ' + y1 + ' ' + x2 + ' ' + y2 + ' ' + x + ' ' + y + ' ';
+          lastCubicX2 = x2; lastCubicY2 = y2;
+          curX = x; curY = y;
+        }
+        lastCmd = 'S';
+        break;
+
+      case 'Q':
+        for (let i = 0; i < args.length; i += 4) {
+          const x1 = isRelative ? curX + args[i] : args[i];
+          const y1 = isRelative ? curY + args[i + 1] : args[i + 1];
+          const x = isRelative ? curX + args[i + 2] : args[i + 2];
+          const y = isRelative ? curY + args[i + 3] : args[i + 3];
+          result += 'Q ' + x1 + ' ' + y1 + ' ' + x + ' ' + y + ' ';
+          lastQuadX1 = x1; lastQuadY1 = y1;
+          curX = x; curY = y;
+        }
+        lastCmd = 'Q';
+        break;
+
+      case 'T': // Smooth quadratic → Convert to Q
+        for (let i = 0; i < args.length; i += 2) {
+          let x1, y1;
+          if (lastCmd === 'Q' || lastCmd === 'T') {
+            x1 = 2 * curX - lastQuadX1;
+            y1 = 2 * curY - lastQuadY1;
+          } else {
+            x1 = curX;
+            y1 = curY;
+          }
+          const x = isRelative ? curX + args[i] : args[i];
+          const y = isRelative ? curY + args[i + 1] : args[i + 1];
+          result += 'Q ' + x1 + ' ' + y1 + ' ' + x + ' ' + y + ' ';
+          lastQuadX1 = x1; lastQuadY1 = y1;
+          curX = x; curY = y;
+        }
+        lastCmd = 'T';
+        break;
+
+      case 'A': // Arc - not supported by Figma's vectorPaths API
+        throw new Error("SVG Arc commands (A/a) are not supported in pathData mode. Use 'svgString' parameter instead for full SVG support.");
+
+      case 'Z':
+        result += 'Z ';
+        curX = startX; curY = startY;
+        lastCmd = 'Z';
+        break;
+    }
+  }
+
+  return result.trim();
+}
+
+function createVector({ pathData, width, height, x = 0, y = 0, fillHex, strokeHex, strokeWeight = 1, name = "Vector", parentId, svgString }) {
+  // If full SVG string provided, use createNodeFromSvg (handles arcs, circles, etc.)
+  if (svgString) {
+    const frame = figma.createNodeFromSvg(svgString);
+    frame.name = name;
+    frame.x = x;
+    frame.y = y;
+    if (width && height) {
+      frame.resize(width, height);
+    }
+    getParent(parentId).appendChild(frame);
+    return { nodeId: frame.id, type: frame.type, name: frame.name };
+  }
+
+  // Validate pathData is provided
+  if (!pathData) {
+    throw new Error("Either 'svgString' or 'pathData' must be provided");
+  }
+
+  // Otherwise use pathData with vectorPaths API
+  const vector = figma.createVector();
+  vector.name = name;
+
+  // Convert relative commands to absolute (Figma vectorPaths only supports absolute)
+  const normalizedPath = normalizePathToAbsolute(pathData);
+
+  vector.vectorPaths = [{
+    windingRule: "NONZERO",
+    data: normalizedPath
+  }];
+
+  // Resize to desired dimensions
+  vector.resize(width, height);
+  vector.x = x;
+  vector.y = y;
+
+  // Apply fill if specified
+  if (fillHex) {
+    vector.fills = [{ type: "SOLID", color: hexToRGB(fillHex) }];
+  } else {
+    vector.fills = [];
+  }
+
+  // Apply stroke if specified
+  if (strokeHex) {
+    vector.strokes = [{ type: "SOLID", color: hexToRGB(strokeHex) }];
+    vector.strokeWeight = strokeWeight;
+    vector.strokeCap = "ROUND";
+    vector.strokeJoin = "ROUND";
+  }
+
+  getParent(parentId).appendChild(vector);
+  return { nodeId: vector.id, type: vector.type, name: vector.name };
+}
+
+function placeImageUrl({ width, height, x = 0, y = 0, base64, cornerRadius = 0, name = "Image", parentId }) {
+  // base64 is passed from server after fetching the URL
+  const bytes = base64ToUint8Array(base64);
+  const image = figma.createImage(bytes);
+  const r = figma.createRectangle();
+  r.name = name;
+  r.resize(width, height);
+  r.x = x;
+  r.y = y;
+  if (cornerRadius > 0) r.cornerRadius = cornerRadius;
+  r.fills = [{ type: "IMAGE", imageHash: image.hash, scaleMode: "FILL" }];
+  getParent(parentId).appendChild(r);
+  return { nodeId: r.id, type: r.type, name: r.name };
 }
 
 // ---------- Selection / find / pages ----------
@@ -263,10 +562,20 @@ function addEffect({ nodeId, type, radius = 8, spread = 0, hex = "#000000", opac
   const n = getNode(nodeId);
   if (!("effects" in n)) throw new Error("Node does not support effects");
   const newEff = (() => {
-    if (type === "LAYER_BLUR" || type === "BACKGROUND_BLUR") return { type, radius };
+    if (type === "LAYER_BLUR" || type === "BACKGROUND_BLUR") {
+      return { type, radius, visible: true };
+    }
     const rgb = hexToRGB(hex);
     const color = { r: rgb.r, g: rgb.g, b: rgb.b, a: opacity };
-    return { type, radius, spread, color, offset: { x: offsetX, y: offsetY } };
+    return {
+      type,
+      radius,
+      spread,
+      color,
+      offset: { x: offsetX, y: offsetY },
+      visible: true,
+      blendMode: "NORMAL"
+    };
   })();
   const currentEffects = [];
   for (let i = 0; i < n.effects.length; i++) currentEffects.push(n.effects[i]);
@@ -275,6 +584,73 @@ function addEffect({ nodeId, type, radius = 8, spread = 0, hex = "#000000", opac
   return { nodeId, effects: n.effects.length };
 }
 function clearEffects({ nodeId }) { const n = getNode(nodeId); if (!("effects" in n)) throw new Error("Node does not support effects"); n.effects = []; return { nodeId }; }
+
+// ---------- Gradient tools ----------
+function angleToTransform(angle = 135) {
+  // Convert angle to Figma's gradient transform matrix
+  // Figma uses a 2x3 matrix: [[a, c, tx], [b, d, ty]]
+  const radians = (angle * Math.PI) / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  // Adjust for Figma's coordinate system (0,0 is top-left, gradient goes from 0 to 1)
+  return [
+    [cos, sin, 0.5 - cos * 0.5 - sin * 0.5],
+    [-sin, cos, 0.5 + sin * 0.5 - cos * 0.5]
+  ];
+}
+
+function hexToRGBA(hex, opacity = 1) {
+  const rgb = hexToRGB(hex);
+  return { r: rgb.r, g: rgb.g, b: rgb.b, a: opacity };
+}
+
+function setGradientFill({ nodeId, startHex, endHex, angle = 135, startOpacity = 1, endOpacity = 1 }) {
+  const n = getNode(nodeId);
+  assertFills(n);
+  const gradientFill = {
+    type: "GRADIENT_LINEAR",
+    gradientTransform: angleToTransform(angle),
+    gradientStops: [
+      { position: 0, color: hexToRGBA(startHex, startOpacity) },
+      { position: 1, color: hexToRGBA(endHex, endOpacity) }
+    ]
+  };
+  n.fills = [gradientFill];
+  return { nodeId };
+}
+
+function setGradientStroke({ nodeId, startHex, endHex, strokeWeight = 1, angle = 135, strokeAlign = "CENTER" }) {
+  const n = getNode(nodeId);
+  if (!("strokes" in n)) throw new Error("Node does not support strokes");
+  const gradientStroke = {
+    type: "GRADIENT_LINEAR",
+    gradientTransform: angleToTransform(angle),
+    gradientStops: [
+      { position: 0, color: hexToRGBA(startHex, 1) },
+      { position: 1, color: hexToRGBA(endHex, 1) }
+    ]
+  };
+  n.strokes = [gradientStroke];
+  n.strokeWeight = strokeWeight;
+  n.strokeAlign = strokeAlign;
+  return { nodeId };
+}
+
+function setTextGradient({ nodeId, startHex, endHex, angle = 135 }) {
+  const t = getNode(nodeId);
+  if (t.type !== "TEXT") throw new Error("Not a text node");
+  const gradientFill = {
+    type: "GRADIENT_LINEAR",
+    gradientTransform: angleToTransform(angle),
+    gradientStops: [
+      { position: 0, color: hexToRGBA(startHex, 1) },
+      { position: 1, color: hexToRGBA(endHex, 1) }
+    ]
+  };
+  t.fills = [gradientFill];
+  return { nodeId };
+}
+
 function layoutGridAdd({ nodeId, pattern = "COLUMNS", count = 12, gutterSize = 20, sectionSize = 80, hex = "#E5E7EB", opacity = 0.5 }) {
   const n = getNode(nodeId);
   if (!("layoutGrids" in n)) throw new Error("Node does not support layoutGrids");
@@ -397,10 +773,7 @@ function booleanOp({ op, nodeIds, name = "Boolean" }) {
 async function exportNode({ nodeId, format = "PNG", scale = 1 }) {
   const n = getNode(nodeId);
   const bytes = await n.exportAsync({ format, constraint: { type: "SCALE", value: scale } });
-  // encode base64
-  let binary = "";
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-  const base64 = btoa(binary);
+  const base64 = uint8ArrayToBase64(bytes);
   return { format, base64 };
 }
 function setPluginData({ nodeId, key, value }) {
@@ -435,4 +808,504 @@ function setProperties({ nodeId, props }) {
     }
   }
   return { nodeId };
+}
+
+// ========== VARIABLES ==========
+
+function createVariableCollection({ name, modes = ["Default"] }) {
+  const collection = figma.variables.createVariableCollection(name);
+
+  // Ensure collection is visible (not hidden from publishing)
+  collection.hiddenFromPublishing = false;
+
+  // Rename the default mode and add additional modes
+  const modeIds = [];
+  for (let i = 0; i < modes.length; i++) {
+    if (i === 0) {
+      // Rename the default mode that's automatically created
+      collection.renameMode(collection.modes[0].modeId, modes[i]);
+      modeIds.push(collection.modes[0].modeId);
+    } else {
+      // Add new modes
+      const modeId = collection.addMode(modes[i]);
+      modeIds.push(modeId);
+    }
+  }
+  return {
+    collectionId: collection.id,
+    name: collection.name,
+    modes: collection.modes.map(m => ({ modeId: m.modeId, name: m.name }))
+  };
+}
+
+function createVariable({ collectionId, name, resolvedType, values, scopes }) {
+  // resolvedType: "COLOR" | "FLOAT" | "STRING" | "BOOLEAN"
+  const collection = figma.variables.getVariableCollectionById(collectionId);
+  if (!collection) throw new Error("Variable collection not found: " + collectionId);
+
+  const variable = figma.variables.createVariable(name, collection, resolvedType);
+
+  // Ensure variable is not hidden from publishing (affects visibility)
+  variable.hiddenFromPublishing = false;
+
+  // Set scopes to make variable visible in UI picker
+  // If not provided, default to ALL_SCOPES for visibility
+  if (scopes && scopes.length > 0) {
+    variable.scopes = scopes;
+  } else {
+    // Default scopes based on type
+    if (resolvedType === "COLOR") {
+      variable.scopes = ["ALL_FILLS", "STROKE_COLOR", "EFFECT_COLOR"];
+    } else if (resolvedType === "FLOAT") {
+      variable.scopes = ["ALL_SCOPES"];
+    } else if (resolvedType === "STRING") {
+      variable.scopes = ["ALL_SCOPES"];
+    }
+    // BOOLEAN variables don't support scopes
+  }
+
+  // Set values for each mode if provided
+  if (values) {
+    for (const modeId in values) {
+      let value = values[modeId];
+      // Convert hex to RGB for COLOR type
+      if (resolvedType === "COLOR" && typeof value === "string") {
+        value = hexToRGB(value);
+      }
+      variable.setValueForMode(modeId, value);
+    }
+  }
+
+  return {
+    variableId: variable.id,
+    name: variable.name,
+    resolvedType: variable.resolvedType,
+    collectionId: collection.id,
+    scopes: variable.scopes
+  };
+}
+
+function getLocalVariableCollections() {
+  const collections = figma.variables.getLocalVariableCollections();
+  return collections.map(c => ({
+    collectionId: c.id,
+    name: c.name,
+    modes: c.modes.map(m => ({ modeId: m.modeId, name: m.name })),
+    variableIds: c.variableIds
+  }));
+}
+
+function getLocalVariables({ collectionId } = {}) {
+  const variables = figma.variables.getLocalVariables();
+  const filtered = collectionId
+    ? variables.filter(v => v.variableCollectionId === collectionId)
+    : variables;
+
+  return filtered.map(v => {
+    const valuesByMode = {};
+    const collection = figma.variables.getVariableCollectionById(v.variableCollectionId);
+    if (collection) {
+      for (const mode of collection.modes) {
+        let val = v.valuesByMode[mode.modeId];
+        // Convert RGB back to hex for COLOR type
+        if (v.resolvedType === "COLOR" && val && typeof val === "object" && "r" in val) {
+          val = rgbToHex(val);
+        }
+        valuesByMode[mode.modeId] = val;
+      }
+    }
+    return {
+      variableId: v.id,
+      name: v.name,
+      resolvedType: v.resolvedType,
+      collectionId: v.variableCollectionId,
+      valuesByMode
+    };
+  });
+}
+
+function setVariableValue({ variableId, modeId, value }) {
+  const variable = figma.variables.getVariableById(variableId);
+  if (!variable) throw new Error("Variable not found: " + variableId);
+
+  let processedValue = value;
+  if (variable.resolvedType === "COLOR" && typeof value === "string") {
+    processedValue = hexToRGB(value);
+  }
+
+  variable.setValueForMode(modeId, processedValue);
+  return { variableId, modeId, value: processedValue };
+}
+
+function bindVariable({ nodeId, field, variableId }) {
+  // field examples: "fill", "stroke", "width", "height", "itemSpacing", etc.
+  const node = getNode(nodeId);
+  const variable = figma.variables.getVariableById(variableId);
+  if (!variable) throw new Error("Variable not found: " + variableId);
+
+  // Handle different field types
+  if (field === "fill" || field === "fills") {
+    // For fill, bind variable to the first solid paint
+    if (!("fills" in node)) throw new Error("Node does not support fills");
+    const solidPaint = figma.variables.setBoundVariableForPaint(
+      { type: "SOLID", color: { r: 0, g: 0, b: 0 } },
+      "color",
+      variable
+    );
+    node.fills = [solidPaint];
+  } else if (field === "stroke" || field === "strokes") {
+    if (!("strokes" in node)) throw new Error("Node does not support strokes");
+    const solidPaint = figma.variables.setBoundVariableForPaint(
+      { type: "SOLID", color: { r: 0, g: 0, b: 0 } },
+      "color",
+      variable
+    );
+    node.strokes = [solidPaint];
+  } else {
+    // For other scalar properties like width, height, itemSpacing, padding, etc.
+    node.setBoundVariable(field, variable);
+  }
+
+  return { nodeId, field, variableId };
+}
+
+function unbindVariable({ nodeId, field }) {
+  const node = getNode(nodeId);
+
+  if (field === "fill" || field === "fills") {
+    // For fills, we need to replace with an unbound solid paint
+    if (!("fills" in node)) throw new Error("Node does not support fills");
+    const currentFills = node.fills;
+    if (currentFills.length > 0 && currentFills[0].type === "SOLID") {
+      // Keep the current color but remove the variable binding
+      node.fills = [{ type: "SOLID", color: currentFills[0].color }];
+    }
+  } else if (field === "stroke" || field === "strokes") {
+    // For strokes, same approach
+    if (!("strokes" in node)) throw new Error("Node does not support strokes");
+    const currentStrokes = node.strokes;
+    if (currentStrokes.length > 0 && currentStrokes[0].type === "SOLID") {
+      node.strokes = [{ type: "SOLID", color: currentStrokes[0].color }];
+    }
+  } else {
+    // For scalar properties, use setBoundVariable with null
+    node.setBoundVariable(field, null);
+  }
+
+  return { nodeId, field };
+}
+
+function deleteVariable({ variableId }) {
+  const variable = figma.variables.getVariableById(variableId);
+  if (!variable) throw new Error("Variable not found: " + variableId);
+  variable.remove();
+  return { deleted: variableId };
+}
+
+function deleteVariableCollection({ collectionId }) {
+  const collection = figma.variables.getVariableCollectionById(collectionId);
+  if (!collection) throw new Error("Variable collection not found: " + collectionId);
+  collection.remove();
+  return { deleted: collectionId };
+}
+
+// Helper to convert RGB to hex
+function rgbToHex(rgb) {
+  const toHex = (n) => {
+    const hex = Math.round(n * 255).toString(16);
+    return hex.length === 1 ? "0" + hex : hex;
+  };
+  return "#" + toHex(rgb.r) + toHex(rgb.g) + toHex(rgb.b);
+}
+
+// ========== STYLES ==========
+
+async function createTextStyle({ name, fontFamily = "Inter", fontStyle = "Regular", fontSize = 16, lineHeight, letterSpacing, textCase, textDecoration }) {
+  await figma.loadFontAsync({ family: fontFamily, style: fontStyle });
+
+  const style = figma.createTextStyle();
+  style.name = name;
+  style.fontName = { family: fontFamily, style: fontStyle };
+  style.fontSize = fontSize;
+
+  if (lineHeight != null) {
+    style.lineHeight = typeof lineHeight === "number"
+      ? { unit: "PIXELS", value: lineHeight }
+      : lineHeight;
+  }
+  if (letterSpacing != null) {
+    style.letterSpacing = typeof letterSpacing === "number"
+      ? { unit: "PIXELS", value: letterSpacing }
+      : letterSpacing;
+  }
+  if (textCase) style.textCase = textCase;
+  if (textDecoration) style.textDecoration = textDecoration;
+
+  return {
+    styleId: style.id,
+    name: style.name,
+    fontFamily: style.fontName.family,
+    fontStyle: style.fontName.style,
+    fontSize: style.fontSize
+  };
+}
+
+function createEffectStyle({ name, effects }) {
+  const style = figma.createEffectStyle();
+  style.name = name;
+
+  // Convert effects array to Figma format
+  if (effects && Array.isArray(effects)) {
+    style.effects = effects.map(eff => {
+      if (eff.type === "DROP_SHADOW" || eff.type === "INNER_SHADOW") {
+        const rgb = eff.hex ? hexToRGB(eff.hex) : { r: 0, g: 0, b: 0 };
+        return {
+          type: eff.type,
+          radius: eff.radius || 8,
+          spread: eff.spread || 0,
+          color: { r: rgb.r, g: rgb.g, b: rgb.b, a: eff.opacity || 0.25 },
+          offset: { x: eff.offsetX || 0, y: eff.offsetY || 2 },
+          visible: true,
+          blendMode: "NORMAL"
+        };
+      } else if (eff.type === "LAYER_BLUR" || eff.type === "BACKGROUND_BLUR") {
+        return {
+          type: eff.type,
+          radius: eff.radius || 8,
+          visible: true
+        };
+      }
+      return eff;
+    });
+  }
+
+  return {
+    styleId: style.id,
+    name: style.name,
+    effectCount: style.effects.length
+  };
+}
+
+function getLocalTextStyles() {
+  const styles = figma.getLocalTextStyles();
+  return styles.map(s => ({
+    styleId: s.id,
+    name: s.name,
+    fontFamily: s.fontName.family,
+    fontStyle: s.fontName.style,
+    fontSize: s.fontSize,
+    lineHeight: s.lineHeight,
+    letterSpacing: s.letterSpacing
+  }));
+}
+
+function getLocalEffectStyles() {
+  const styles = figma.getLocalEffectStyles();
+  return styles.map(s => ({
+    styleId: s.id,
+    name: s.name,
+    effects: s.effects.map(e => ({
+      type: e.type,
+      radius: e.radius,
+      spread: "spread" in e ? e.spread : undefined,
+      offsetX: "offset" in e ? e.offset.x : undefined,
+      offsetY: "offset" in e ? e.offset.y : undefined,
+      opacity: "color" in e ? e.color.a : undefined,
+      hex: "color" in e ? rgbToHex(e.color) : undefined
+    }))
+  }));
+}
+
+async function applyTextStyle({ nodeId, styleId }) {
+  const node = getNode(nodeId);
+  if (node.type !== "TEXT") throw new Error("Not a text node");
+
+  const style = figma.getStyleById(styleId);
+  if (!style || style.type !== "TEXT") throw new Error("Text style not found: " + styleId);
+
+  // Load font before applying
+  await figma.loadFontAsync(style.fontName);
+  node.textStyleId = styleId;
+
+  return { nodeId, styleId };
+}
+
+function applyEffectStyle({ nodeId, styleId }) {
+  const node = getNode(nodeId);
+  if (!("effectStyleId" in node)) throw new Error("Node does not support effect styles");
+
+  const style = figma.getStyleById(styleId);
+  if (!style || style.type !== "EFFECT") throw new Error("Effect style not found: " + styleId);
+
+  node.effectStyleId = styleId;
+  return { nodeId, styleId };
+}
+
+async function updateTextStyle({ styleId, name, fontFamily, fontStyle, fontSize, lineHeight, letterSpacing }) {
+  const style = figma.getStyleById(styleId);
+  if (!style || style.type !== "TEXT") throw new Error("Text style not found: " + styleId);
+
+  if (name) style.name = name;
+  if (fontFamily || fontStyle) {
+    const fam = fontFamily || style.fontName.family;
+    const sty = fontStyle || style.fontName.style;
+    await figma.loadFontAsync({ family: fam, style: sty });
+    style.fontName = { family: fam, style: sty };
+  }
+  if (fontSize != null) style.fontSize = fontSize;
+  if (lineHeight != null) {
+    style.lineHeight = typeof lineHeight === "number"
+      ? { unit: "PIXELS", value: lineHeight }
+      : lineHeight;
+  }
+  if (letterSpacing != null) {
+    style.letterSpacing = typeof letterSpacing === "number"
+      ? { unit: "PIXELS", value: letterSpacing }
+      : letterSpacing;
+  }
+
+  return { styleId, name: style.name };
+}
+
+function updateEffectStyle({ styleId, name, effects }) {
+  const style = figma.getStyleById(styleId);
+  if (!style || style.type !== "EFFECT") throw new Error("Effect style not found: " + styleId);
+
+  if (name) style.name = name;
+  if (effects && Array.isArray(effects)) {
+    style.effects = effects.map(eff => {
+      if (eff.type === "DROP_SHADOW" || eff.type === "INNER_SHADOW") {
+        const rgb = eff.hex ? hexToRGB(eff.hex) : { r: 0, g: 0, b: 0 };
+        return {
+          type: eff.type,
+          radius: eff.radius || 8,
+          spread: eff.spread || 0,
+          color: { r: rgb.r, g: rgb.g, b: rgb.b, a: eff.opacity || 0.25 },
+          offset: { x: eff.offsetX || 0, y: eff.offsetY || 2 },
+          visible: true,
+          blendMode: "NORMAL"
+        };
+      } else if (eff.type === "LAYER_BLUR" || eff.type === "BACKGROUND_BLUR") {
+        return {
+          type: eff.type,
+          radius: eff.radius || 8,
+          visible: true
+        };
+      }
+      return eff;
+    });
+  }
+
+  return { styleId, name: style.name, effectCount: style.effects.length };
+}
+
+function deleteStyle({ styleId }) {
+  const style = figma.getStyleById(styleId);
+  if (!style) throw new Error("Style not found: " + styleId);
+  style.remove();
+  return { deleted: styleId };
+}
+
+// ========== ENHANCED COMPONENTS ==========
+
+function createComponentFromNode({ nodeId, name }) {
+  const node = getNode(nodeId);
+  if (!("type" in node)) throw new Error("Invalid node");
+
+  // Create component and move node's children/properties into it
+  const component = figma.createComponentFromNode(node);
+  if (name) component.name = name;
+
+  return {
+    componentId: component.id,
+    name: component.name,
+    type: component.type
+  };
+}
+
+function createComponentSet({ componentIds, name = "Component Set" }) {
+  // Get all components
+  const components = componentIds.map(id => {
+    const node = getNode(id);
+    if (node.type !== "COMPONENT") throw new Error("Node is not a component: " + id);
+    return node;
+  });
+
+  if (components.length < 1) throw new Error("Need at least 1 component");
+
+  // Combine into component set
+  const componentSet = figma.combineAsVariants(components, page());
+  componentSet.name = name;
+
+  return {
+    componentSetId: componentSet.id,
+    name: componentSet.name,
+    type: componentSet.type,
+    variantCount: componentSet.children.length
+  };
+}
+
+function addComponentProperty({ componentId, propertyName, propertyType, defaultValue, preferredValues }) {
+  const component = getNode(componentId);
+  if (component.type !== "COMPONENT" && component.type !== "COMPONENT_SET") {
+    throw new Error("Node is not a component or component set");
+  }
+
+  // propertyType: "BOOLEAN" | "TEXT" | "INSTANCE_SWAP" | "VARIANT"
+  const propDef = {
+    type: propertyType,
+    defaultValue: defaultValue
+  };
+
+  if (preferredValues) {
+    propDef.preferredValues = preferredValues;
+  }
+
+  component.addComponentProperty(propertyName, propDef.type, propDef.defaultValue);
+
+  return {
+    componentId,
+    propertyName,
+    propertyType
+  };
+}
+
+function setInstanceProperty({ instanceId, propertyName, value }) {
+  const instance = getNode(instanceId);
+  if (instance.type !== "INSTANCE") throw new Error("Node is not an instance");
+
+  // Get component properties
+  const props = instance.componentProperties;
+  if (!props || !(propertyName in props)) {
+    throw new Error("Property not found: " + propertyName);
+  }
+
+  instance.setProperties({ [propertyName]: value });
+
+  return { instanceId, propertyName, value };
+}
+
+function getComponentProperties({ componentId }) {
+  const component = getNode(componentId);
+  if (component.type !== "COMPONENT" && component.type !== "COMPONENT_SET" && component.type !== "INSTANCE") {
+    throw new Error("Node is not a component, component set, or instance");
+  }
+
+  const definitions = component.componentPropertyDefinitions || {};
+  const values = component.componentProperties || {};
+
+  return {
+    componentId,
+    definitions: Object.entries(definitions).map(([name, def]) => ({
+      name,
+      type: def.type,
+      defaultValue: def.defaultValue,
+      variantOptions: def.variantOptions
+    })),
+    values: Object.entries(values).map(([name, val]) => ({
+      name,
+      value: val.value,
+      type: val.type
+    }))
+  };
 }

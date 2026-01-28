@@ -1,6 +1,6 @@
 {
   "name": "mcp-figma-write-bridge",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "A Model Context Protocol server that enables AI agents to manipulate Figma documents programmatically",
   "type": "module",
   "private": false,
@@ -8,7 +8,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/yourusername/figma-mcp-write-bridge.git"
+    "url": "https://github.com/dmytro-zemliak/Figma-MCP-Write-Bridge.git"
   },
   "keywords": [
     "figma",
@@ -19,13 +19,13 @@
     "figma-plugin"
   ],
   "bugs": {
-    "url": "https://github.com/yourusername/figma-mcp-write-bridge/issues"
+    "url": "https://github.com/dmytro-zemliak/Figma-MCP-Write-Bridge/issues"
   },
-  "homepage": "https://github.com/yourusername/figma-mcp-write-bridge#readme",
+  "homepage": "https://github.com/dmytro-zemliak/Figma-MCP-Write-Bridge#readme",
   "scripts": {
     "start": "tsx server.ts",
     "simple": "tsx simple-server.ts",
-    "figma": "tsx figma-write-bridge.ts"
+    "figma": "tsx server.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.17.5",

@@ -21,7 +21,8 @@ AI Client (VS Code) ←→ MCP Server (stdio) ←→ WebSocket Bridge ←→ Fig
 ### Node Creation
 - Create frames, rectangles, ellipses, lines, polygons, and stars
 - Add text with customizable fonts and styling
-- Place images from base64-encoded data
+- Place images from base64-encoded data or URL
+- Create vector icons from SVG (full SVG string or path data)
 
 ### Node Management
 - Find and select nodes by name or type
@@ -29,26 +30,46 @@ AI Client (VS Code) ←→ MCP Server (stdio) ←→ WebSocket Bridge ←→ Fig
 - Resize and rotate elements
 - Position nodes precisely
 - Group and ungroup nodes
+- Create and switch pages
 
 ### Styling & Effects
 - Set fills and strokes with hex color support
+- Apply gradient fills and strokes
 - Configure corner radius, opacity, and blend modes
 - Add drop shadows, inner shadows, and blur effects
 - Manage layout grids
 
 ### Layout
-- Configure Auto Layout
+- Configure Auto Layout with full control over spacing, padding, alignment
 - Set child constraints
 - Control spacing and alignment
 
 ### Text Manipulation
 - Edit text content
 - Apply text styles (font family, size, weight, spacing)
-- Set text colors
+- Set text colors and gradients
 
-### Components & Boolean Operations
-- Create components and instances
-- Detach instances
+### Variables (Design Tokens)
+- Create variable collections with multiple modes (Light/Dark themes)
+- Define COLOR, FLOAT, STRING, and BOOLEAN variables
+- Bind variables to node properties (fill, stroke, spacing, etc.)
+- Update variables to automatically update all bound nodes
+- Configure variable scopes for UI picker visibility
+
+### Styles
+- Create and manage reusable text styles
+- Create and manage effect styles (shadows, blurs)
+- Apply styles to nodes for consistent design
+- Update styles to propagate changes across all uses
+
+### Components
+- Create components from existing nodes
+- Create component sets for variants (hover, active, disabled states)
+- Add configurable properties (text, boolean, instance swap)
+- Create and manage component instances
+- Detach instances from components
+
+### Boolean Operations
 - Perform boolean operations (union, subtract, intersect, exclude)
 
 ### Data & Export
@@ -138,7 +159,7 @@ Or using npm:
 ## Available Tools
 
 ### Creation Tools
-- `create_frame` - Create a new frame
+- `create_frame` - Create a new frame with optional parentId for nesting
 - `create_rectangle` - Create a rectangle with optional corner radius
 - `create_ellipse` - Create an ellipse
 - `create_line` - Create a line
@@ -146,6 +167,8 @@ Or using npm:
 - `create_star` - Create a star shape
 - `add_text` - Add text with font styling
 - `place_image_base64` - Place an image from base64 data
+- `place_image_url` - Fetch and place an image from URL
+- `create_vector` - Create vector/icon from SVG (supports full SVG string or path data)
 
 ### Node Management
 - `find_nodes` - Find nodes by name or type
@@ -159,10 +182,14 @@ Or using npm:
 - `set_position` - Set absolute position
 - `group_nodes` - Group multiple nodes
 - `ungroup` - Ungroup a group node
+- `create_page` - Create a new page
+- `set_current_page` - Switch to a different page
 
 ### Styling
-- `set_fill` - Set fill color
+- `set_fill` - Set solid fill color
+- `set_gradient_fill` - Apply linear gradient fill
 - `set_stroke` - Configure stroke properties
+- `set_gradient_stroke` - Apply gradient stroke
 - `set_corner_radius` - Set corner radius (uniform or per-corner)
 - `set_opacity` - Set opacity
 - `set_blend_mode` - Set blend mode
@@ -172,23 +199,93 @@ Or using npm:
 ### Layout
 - `layout_grid_add` - Add layout grid
 - `layout_grid_clear` - Clear layout grids
-- `set_auto_layout` - Configure Auto Layout
+- `set_auto_layout` - Configure Auto Layout (direction, spacing, padding, alignment)
 - `set_constraints` - Set child constraints
 
 ### Text
 - `set_text_content` - Edit text content
-- `set_text_style` - Apply text styling
+- `set_text_style` - Apply text styling (font, size, weight, spacing)
 - `set_text_color` - Set text color
+- `set_text_gradient` - Apply gradient to text
+
+### Variables (Design Tokens)
+- `create_variable_collection` - Create a collection with optional modes (Light/Dark)
+- `create_variable` - Create a variable (COLOR, FLOAT, STRING, BOOLEAN)
+- `get_local_variable_collections` - List all variable collections
+- `get_local_variables` - List all variables, optionally filtered by collection
+- `set_variable_value` - Update a variable's value for a specific mode
+- `bind_variable` - Bind a variable to a node property (fill, stroke, spacing, etc.)
+- `unbind_variable` - Remove variable binding from a node property
+- `delete_variable` - Delete a variable
+- `delete_variable_collection` - Delete a collection and all its variables
+
+### Styles
+- `create_text_style` - Create a reusable text style
+- `create_effect_style` - Create a reusable effect style (shadows, blurs)
+- `get_local_text_styles` - List all text styles
+- `get_local_effect_styles` - List all effect styles
+- `apply_text_style` - Apply a text style to a text node
+- `apply_effect_style` - Apply an effect style to a node
+- `update_text_style` - Update an existing text style
+- `update_effect_style` - Update an existing effect style
+- `delete_style` - Delete a text or effect style
 
 ### Components
-- `create_component` - Create a component
-- `create_instance` - Create component instance
+- `create_component` - Create an empty component
+- `create_component_from_node` - Convert an existing node to a component
+- `create_component_set` - Combine components into a variant set
+- `create_instance` - Create a component instance
 - `detach_instance` - Detach instance from component
+- `add_component_property` - Add a configurable property (TEXT, BOOLEAN, INSTANCE_SWAP)
+- `set_instance_property` - Set a property value on an instance
+- `get_component_properties` - Get all properties of a component
 
 ### Advanced
 - `boolean_op` - Boolean operations on vector nodes
 - `export_node` - Export as PNG/JPG/SVG
 - `set_plugin_data` / `get_plugin_data` - Store/retrieve JSON data
+
+## SVG Icons
+
+The `create_vector` tool supports two modes for creating icons:
+
+### Using Full SVG String (Recommended)
+
+Pass the complete SVG markup via `svgString`. This supports all SVG features including arcs, circles, and complex shapes.
+
+```json
+{
+  "svgString": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2\"/><circle cx=\"12\" cy=\"7\" r=\"4\"/></svg>",
+  "width": 24,
+  "height": 24,
+  "name": "user-icon"
+}
+```
+
+### Using Path Data
+
+For simple paths, pass just the `d` attribute value via `pathData`:
+
+```json
+{
+  "pathData": "M20 6L9 17l-5-5",
+  "width": 24,
+  "height": 24,
+  "strokeHex": "#000000",
+  "strokeWeight": 2,
+  "name": "check-icon"
+}
+```
+
+**Note:** `pathData` mode uses Figma's `vectorPaths` API which does not accept arc commands (A/a). For icons with arcs, rounded corners, or circles, use `svgString` instead (which uses Figma's full SVG import).
+
+### Icon Library Compatibility
+
+| Library | Works with `pathData` | Notes |
+|---------|----------------------|-------|
+| Heroicons | ✅ Yes | Uses bezier curves |
+| Lucide | ⚠️ Some | Many use arcs - use `svgString` |
+| Feather | ❌ No | Uses line/circle elements - use `svgString` |
 
 ## Example Usage
 
@@ -254,14 +351,16 @@ figma-mcp-write-bridge/
 - **Server logs**: Check stderr output from `npm start`
 - **Plugin logs**: Open Figma → Plugins → Development → Open Console
 - **WebSocket connection**: Look for `[bridge] Plugin connected` message
-- **Timeouts**: Default 15s timeout for operations (configurable in `sendToPlugin()`)
+- **Timeouts**: Default 20s timeout for operations (configurable in `sendToPlugin()`)
 
 ## Limitations
 
 - Single client connection (one plugin instance at a time)
-- Operations must complete within 15 seconds
+- Operations must complete within 20 seconds
 - Requires Figma desktop app or browser access
 - Network access must be allowed in Figma plugin settings
+- SVG `pathData` mode uses Figma's `vectorPaths` API which doesn't accept arc commands (use `svgString` instead)
+- Multiple variable modes (Light/Dark) require Figma paid plan
 
 ## Troubleshooting
 
@@ -299,6 +398,7 @@ MIT License - see [LICENSE](LICENSE) file for details
 
 ## Acknowledgments
 
+- Originally created by [firasmj](https://github.com/firasmj/Figma-MCP-Write-Bridge)
 - Built with the [Model Context Protocol SDK](https://github.com/modelcontextprotocol)
 - Uses [Figma Plugin API](https://www.figma.com/plugin-docs/)
 
