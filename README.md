@@ -70,7 +70,7 @@ The plugin "MCP Figma Toolkit" should now appear under **Plugins → Development
 ### Alternative: Clone from Source
 
 ```bash
-git clone https://github.com/dmytro-zemliak/mcp-figma-toolkit.git
+git clone https://github.com/dmytro-zemliak/Figma-MCP-Write-Bridge.git
 cd mcp-figma-toolkit
 npm install
 npm run build
