@@ -17,6 +17,45 @@ function reply(replyTo, result, error) {
 const page = () => figma.currentPage;
 
 // ---------- Utilities ----------
+function rgbToHex(r, g, b) {
+  const toHex = (v) => Math.round(Math.min(1, Math.max(0, v)) * 255).toString(16).padStart(2, "0");
+  return "#" + toHex(r) + toHex(g) + toHex(b);
+}
+
+function serializePaints(paints) {
+  if (!paints || !Array.isArray(paints)) return [];
+  return paints.map(p => {
+    const base = { type: p.type, visible: p.visible !== false, opacity: p.opacity ?? 1, blendMode: p.blendMode };
+    if (p.type === "SOLID" && p.color) {
+      base.hex = rgbToHex(p.color.r, p.color.g, p.color.b);
+    } else if (p.type && p.type.startsWith("GRADIENT_") && p.gradientStops) {
+      base.gradientStops = p.gradientStops.map(s => ({
+        position: s.position,
+        hex: rgbToHex(s.color.r, s.color.g, s.color.b),
+        opacity: s.color.a ?? 1
+      }));
+    } else if (p.type === "IMAGE") {
+      base.scaleMode = p.scaleMode;
+      base.imageHash = p.imageHash;
+    }
+    return base;
+  });
+}
+
+function serializeEffects(effects) {
+  if (!effects || !Array.isArray(effects)) return [];
+  return effects.map(e => {
+    const base = { type: e.type, visible: e.visible !== false, radius: e.radius };
+    if (e.offset) base.offset = { x: e.offset.x, y: e.offset.y };
+    if (e.spread !== undefined) base.spread = e.spread;
+    if (e.color) {
+      base.hex = rgbToHex(e.color.r, e.color.g, e.color.b);
+      base.opacity = e.color.a ?? 1;
+    }
+    return base;
+  });
+}
+
 function hexToRGB(hex) {
   const v = String(hex || "").replace("#", "").trim();
   if (!/^[0-9a-fA-F]{6}$/.test(v)) throw new Error("Invalid hex color");
@@ -643,6 +682,98 @@ function getNodeInfo({ nodeId }) {
 
   // Opacity
   if ("opacity" in node) info.opacity = node.opacity;
+
+  // Blend mode
+  if ("blendMode" in node) info.blendMode = node.blendMode;
+
+  // Visual properties (fills, strokes, effects)
+  if ("fills" in node) {
+    try { info.fills = serializePaints(node.fills); } catch (_) {}
+  }
+  if ("strokes" in node) {
+    try { info.strokes = serializePaints(node.strokes); } catch (_) {}
+  }
+  if ("strokeWeight" in node) info.strokeWeight = node.strokeWeight;
+  if ("strokeAlign" in node) info.strokeAlign = node.strokeAlign;
+
+  // Corner radius
+  if ("cornerRadius" in node) {
+    if (node.cornerRadius !== figma.mixed) {
+      info.cornerRadius = node.cornerRadius;
+    } else {
+      info.cornerRadius = {
+        topLeft: node.topLeftRadius,
+        topRight: node.topRightRadius,
+        bottomLeft: node.bottomLeftRadius,
+        bottomRight: node.bottomRightRadius
+      };
+    }
+  }
+
+  // Effects
+  if ("effects" in node) {
+    try { info.effects = serializeEffects(node.effects); } catch (_) {}
+  }
+
+  // Auto-layout properties
+  if ("layoutMode" in node && node.layoutMode !== "NONE") {
+    info.autoLayout = {
+      layoutMode: node.layoutMode,
+      itemSpacing: node.itemSpacing,
+      counterAxisSpacing: node.counterAxisSpacing,
+      paddingLeft: node.paddingLeft,
+      paddingRight: node.paddingRight,
+      paddingTop: node.paddingTop,
+      paddingBottom: node.paddingBottom,
+      primaryAxisAlignItems: node.primaryAxisAlignItems,
+      counterAxisAlignItems: node.counterAxisAlignItems,
+      layoutSizingHorizontal: node.layoutSizingHorizontal,
+      layoutSizingVertical: node.layoutSizingVertical
+    };
+  }
+
+  // Text properties
+  if (node.type === "TEXT") {
+    info.text = { characters: node.characters };
+    try {
+      const fs = node.fontSize;
+      info.text.fontSize = fs !== figma.mixed ? fs : "MIXED";
+    } catch (_) {}
+    try {
+      const fn = node.fontName;
+      info.text.fontName = fn !== figma.mixed ? { family: fn.family, style: fn.style } : "MIXED";
+    } catch (_) {}
+    if ("textAlignHorizontal" in node) info.text.textAlignHorizontal = node.textAlignHorizontal;
+    if ("textAlignVertical" in node) info.text.textAlignVertical = node.textAlignVertical;
+    try {
+      const lh = node.lineHeight;
+      info.text.lineHeight = lh !== figma.mixed ? lh : "MIXED";
+    } catch (_) {}
+    try {
+      const ls = node.letterSpacing;
+      info.text.letterSpacing = ls !== figma.mixed ? ls : "MIXED";
+    } catch (_) {}
+    if ("textAutoResize" in node) info.text.textAutoResize = node.textAutoResize;
+    // Text fills (color)
+    if ("fills" in node) {
+      try { info.text.fills = serializePaints(node.fills); } catch (_) {}
+    }
+  }
+
+  // Component info
+  if (node.type === "INSTANCE" && node.mainComponent) {
+    info.mainComponent = { id: node.mainComponent.id, name: node.mainComponent.name };
+    try {
+      const props = node.componentProperties;
+      if (props && Object.keys(props).length > 0) info.componentProperties = props;
+    } catch (_) {}
+  }
+  if (node.type === "COMPONENT") {
+    try {
+      const propDefs = node.componentPropertyDefinitions;
+      if (propDefs && Object.keys(propDefs).length > 0) info.componentPropertyDefinitions = propDefs;
+    } catch (_) {}
+  }
 
   return info;
 }
