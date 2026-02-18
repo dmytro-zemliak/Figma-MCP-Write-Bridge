@@ -25,14 +25,14 @@ function rgbToHex(r, g, b) {
 function serializePaints(paints) {
   if (!paints || !Array.isArray(paints)) return [];
   return paints.map(p => {
-    const base = { type: p.type, visible: p.visible !== false, opacity: p.opacity ?? 1, blendMode: p.blendMode };
+    const base = { type: p.type, visible: p.visible !== false, opacity: p.opacity != null ? p.opacity : 1, blendMode: p.blendMode };
     if (p.type === "SOLID" && p.color) {
       base.hex = rgbToHex(p.color.r, p.color.g, p.color.b);
     } else if (p.type && p.type.startsWith("GRADIENT_") && p.gradientStops) {
       base.gradientStops = p.gradientStops.map(s => ({
         position: s.position,
         hex: rgbToHex(s.color.r, s.color.g, s.color.b),
-        opacity: s.color.a ?? 1
+        opacity: s.color.a != null ? s.color.a : 1
       }));
     } else if (p.type === "IMAGE") {
       base.scaleMode = p.scaleMode;
@@ -50,7 +50,7 @@ function serializeEffects(effects) {
     if (e.spread !== undefined) base.spread = e.spread;
     if (e.color) {
       base.hex = rgbToHex(e.color.r, e.color.g, e.color.b);
-      base.opacity = e.color.a ?? 1;
+      base.opacity = e.color.a != null ? e.color.a : 1;
     }
     return base;
   });
