@@ -17,23 +17,22 @@ function reply(replyTo, result, error) {
 const page = () => figma.currentPage;
 
 // ---------- Utilities ----------
-function rgbToHex(r, g, b) {
-  const toHex = (v) => Math.round(Math.min(1, Math.max(0, v)) * 255).toString(16).padStart(2, "0");
-  return "#" + toHex(r) + toHex(g) + toHex(b);
-}
-
 function serializePaints(paints) {
-  if (!paints || !Array.isArray(paints)) return [];
-  return paints.map(p => {
-    const base = { type: p.type, visible: p.visible !== false, opacity: p.opacity != null ? p.opacity : 1, blendMode: p.blendMode };
+  if (!paints || typeof paints.length !== "number") return [];
+  var arr = [];
+  for (var i = 0; i < paints.length; i++) { arr.push(paints[i]); }
+  return arr.map(function(p) {
+    var base = { type: p.type, visible: p.visible !== false, opacity: p.opacity != null ? p.opacity : 1, blendMode: p.blendMode };
     if (p.type === "SOLID" && p.color) {
-      base.hex = rgbToHex(p.color.r, p.color.g, p.color.b);
-    } else if (p.type && p.type.startsWith("GRADIENT_") && p.gradientStops) {
-      base.gradientStops = p.gradientStops.map(s => ({
-        position: s.position,
-        hex: rgbToHex(s.color.r, s.color.g, s.color.b),
-        opacity: s.color.a != null ? s.color.a : 1
-      }));
+      base.hex = rgbToHex(p.color);
+    } else if (p.type && p.type.indexOf("GRADIENT") === 0 && p.gradientStops) {
+      base.gradientStops = p.gradientStops.map(function(s) {
+        return {
+          position: s.position,
+          hex: s.color ? rgbToHex(s.color) : null,
+          opacity: s.color && s.color.a != null ? s.color.a : 1
+        };
+      });
     } else if (p.type === "IMAGE") {
       base.scaleMode = p.scaleMode;
       base.imageHash = p.imageHash;
@@ -43,13 +42,15 @@ function serializePaints(paints) {
 }
 
 function serializeEffects(effects) {
-  if (!effects || !Array.isArray(effects)) return [];
-  return effects.map(e => {
-    const base = { type: e.type, visible: e.visible !== false, radius: e.radius };
+  if (!effects || typeof effects.length !== "number") return [];
+  var arr = [];
+  for (var i = 0; i < effects.length; i++) { arr.push(effects[i]); }
+  return arr.map(function(e) {
+    var base = { type: e.type, visible: e.visible !== false, radius: e.radius };
     if (e.offset) base.offset = { x: e.offset.x, y: e.offset.y };
     if (e.spread !== undefined) base.spread = e.spread;
     if (e.color) {
-      base.hex = rgbToHex(e.color.r, e.color.g, e.color.b);
+      base.hex = rgbToHex(e.color);
       base.opacity = e.color.a != null ? e.color.a : 1;
     }
     return base;
