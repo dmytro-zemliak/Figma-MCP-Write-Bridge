@@ -616,6 +616,27 @@ server.registerTool("delete_variable_collection", {
   inputSchema: { collectionId: z.string() }
 }, async (input) => ok(await sendToPlugin("delete_variable_collection", input)));
 
+// ========== LIBRARY VARIABLES ==========
+
+server.registerTool("get_library_variable_collections", {
+  description: "List all available library variable collections from enabled team libraries.",
+  inputSchema: {}
+}, async () => ok(await sendToPlugin("get_library_variable_collections", {})));
+
+server.registerTool("get_library_variables_in_collection", {
+  description: "List all variables in a library collection. Use the collection key from get_library_variable_collections.",
+  inputSchema: {
+    collectionKey: z.string().describe("The collection key from get_library_variable_collections")
+  }
+}, async (input) => ok(await sendToPlugin("get_library_variables_in_collection", input)));
+
+server.registerTool("import_library_variable", {
+  description: "Import a library variable by key so it can be used locally (bind to nodes, read values). Returns the local variable ID.",
+  inputSchema: {
+    key: z.string().describe("The variable key from get_library_variables_in_collection")
+  }
+}, async (input) => ok(await sendToPlugin("import_library_variable", input)));
+
 // ========== STYLES ==========
 
 server.registerTool("create_text_style", {
@@ -752,6 +773,54 @@ server.registerTool("get_component_properties", {
     componentId: z.string().describe("ID of the component, component set, or instance")
   }
 }, async (input) => ok(await sendToPlugin("get_component_properties", input)));
+
+const valueOrVariable = z.union([
+  z.number(),
+  z.object({ variableId: z.string().describe("Figma variable ID to bind") })
+]).describe("Raw number value, or { variableId } to bind a variable");
+
+const paintValue = z.union([
+  z.string().describe("Hex color string e.g. '#FF0000'"),
+  z.object({ variableId: z.string().describe("Figma color variable ID to bind") })
+]).describe("Hex color string, or { variableId } to bind a color variable");
+
+server.registerTool("batch_update_components", {
+  description: "Batch-update component variants in a COMPONENT_SET using rules. Each rule matches variants by their property values (parsed from 'Key=Value' names) and applies updates. Rules are applied in order — later rules override earlier ones. Values can be raw numbers or { variableId } objects to bind variables.",
+  inputSchema: {
+    componentSetId: z.string().describe("ID of the COMPONENT_SET to update"),
+    rules: z.array(z.object({
+      match: z.record(z.string(), z.string()).optional().describe("Variant property conditions to match, e.g. { 'Size': 'md', 'Hierarchy': 'Primary' }. Omit or empty to match all variants."),
+      cornerRadius: valueOrVariable.optional().describe("Corner radius"),
+      padding: z.object({
+        left: valueOrVariable.optional(),
+        right: valueOrVariable.optional(),
+        top: valueOrVariable.optional(),
+        bottom: valueOrVariable.optional()
+      }).optional().describe("Auto-layout padding"),
+      itemSpacing: valueOrVariable.optional().describe("Auto-layout item spacing / gap"),
+      fill: paintValue.optional().describe("Fill color (replaces all fills with single solid)"),
+      stroke: paintValue.optional().describe("Stroke color (replaces all strokes with single solid)"),
+      strokeWeight: z.number().optional().describe("Stroke weight"),
+      alignment: z.object({
+        primary: z.enum(["MIN", "CENTER", "MAX", "SPACE_BETWEEN"]).optional(),
+        counter: z.enum(["MIN", "CENTER", "MAX"]).optional()
+      }).optional().describe("Auto-layout alignment"),
+      sizing: z.object({
+        horizontal: z.enum(["HUG", "FIXED", "FILL"]).optional(),
+        vertical: z.enum(["HUG", "FIXED", "FILL"]).optional(),
+        width: z.number().optional().describe("Explicit width (for FIXED sizing)"),
+        height: z.number().optional().describe("Explicit height (for FIXED sizing)")
+      }).optional().describe("Layout sizing mode and dimensions"),
+      font: z.object({
+        family: z.string().optional(),
+        style: z.string().optional(),
+        size: z.number().optional(),
+        lineHeight: z.number().optional()
+      }).optional().describe("Font settings applied to all TEXT descendants")
+    })).describe("Rules applied in order. Each rule has a match condition and updates."),
+    dryRun: z.boolean().optional().describe("If true, report what would change without modifying")
+  }
+}, async (input) => ok(await sendToPlugin("batch_update_components", input)));
 
 // Connect to VS Code over stdio
 const transport = new StdioServerTransport();

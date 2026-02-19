@@ -6,7 +6,7 @@ figma.ui.onmessage = async (msg) => {
   const { id, action, args } = msg || {};
   try {
     const result = await handleAction(action, args || {});
-    reply(id, Object.assign({ ok: true }, result || {}));
+    reply(id, Array.isArray(result) ? { ok: true, data: result } : Object.assign({ ok: true }, result || {}));
   } catch (e) {
     reply(id, { ok: false }, e instanceof Error ? e.message : String(e));
   }
@@ -27,15 +27,72 @@ function serializePaints(paints) {
       base.hex = rgbToHex(p.color);
     } else if (p.type && p.type.indexOf("GRADIENT") === 0 && p.gradientStops) {
       base.gradientStops = p.gradientStops.map(function(s) {
-        return {
+        var stop = {
           position: s.position,
           hex: s.color ? rgbToHex(s.color) : null,
           opacity: s.color && s.color.a != null ? s.color.a : 1
         };
+        if (s.boundVariables) {
+          var sbv = {};
+          var stopBVKeys = ["color"];
+          for (var sk in s.boundVariables) {
+            var sb = s.boundVariables[sk];
+            if (sb && sb.id) {
+              sbv[sk] = { type: sb.type, id: sb.id };
+              try {
+                var sv = figma.variables.getVariableById(sb.id);
+                if (sv) { sbv[sk].name = sv.name; sbv[sk].resolvedType = sv.resolvedType; }
+              } catch (_) {}
+            }
+          }
+          for (var si = 0; si < stopBVKeys.length; si++) {
+            var spk = stopBVKeys[si];
+            if (!(spk in sbv)) {
+              try {
+                var spb = s.boundVariables[spk];
+                if (spb && spb.id) {
+                  sbv[spk] = { type: spb.type, id: spb.id };
+                  var spv = figma.variables.getVariableById(spb.id);
+                  if (spv) { sbv[spk].name = spv.name; sbv[spk].resolvedType = spv.resolvedType; }
+                }
+              } catch (_) {}
+            }
+          }
+          if (Object.keys(sbv).length > 0) stop.boundVariables = sbv;
+        }
+        return stop;
       });
     } else if (p.type === "IMAGE") {
       base.scaleMode = p.scaleMode;
       base.imageHash = p.imageHash;
+    }
+    if (p.boundVariables) {
+      var pbv = {};
+      var paintBVKeys = ["color", "opacity"];
+      for (var pk in p.boundVariables) {
+        var pb = p.boundVariables[pk];
+        if (pb && pb.id) {
+          pbv[pk] = { type: pb.type, id: pb.id };
+          try {
+            var pv = figma.variables.getVariableById(pb.id);
+            if (pv) { pbv[pk].name = pv.name; pbv[pk].resolvedType = pv.resolvedType; }
+          } catch (_) {}
+        }
+      }
+      for (var pi = 0; pi < paintBVKeys.length; pi++) {
+        var ppk = paintBVKeys[pi];
+        if (!(ppk in pbv)) {
+          try {
+            var ppb = p.boundVariables[ppk];
+            if (ppb && ppb.id) {
+              pbv[ppk] = { type: ppb.type, id: ppb.id };
+              var ppv = figma.variables.getVariableById(ppb.id);
+              if (ppv) { pbv[ppk].name = ppv.name; pbv[ppk].resolvedType = ppv.resolvedType; }
+            }
+          } catch (_) {}
+        }
+      }
+      if (Object.keys(pbv).length > 0) base.boundVariables = pbv;
     }
     return base;
   });
@@ -52,6 +109,22 @@ function serializeEffects(effects) {
     if (e.color) {
       base.hex = rgbToHex(e.color);
       base.opacity = e.color.a != null ? e.color.a : 1;
+    }
+    if (e.boundVariables) {
+      var ebv = {};
+      var ebvKeys = ["radius", "spread", "color", "offsetX", "offsetY"];
+      for (var ei = 0; ei < ebvKeys.length; ei++) {
+        var ek = ebvKeys[ei];
+        try {
+          var eb = e.boundVariables[ek];
+          if (eb && eb.id) {
+            ebv[ek] = { type: eb.type, id: eb.id };
+            var ev = figma.variables.getVariableById(eb.id);
+            if (ev) { ebv[ek].name = ev.name; ebv[ek].resolvedType = ev.resolvedType; }
+          }
+        } catch (_) {}
+      }
+      if (Object.keys(ebv).length > 0) base.boundVariables = ebv;
     }
     return base;
   });
@@ -199,6 +272,9 @@ async function handleAction(action, input) {
     case "unbind_variable": return unbindVariable(input);
     case "delete_variable": return deleteVariable(input);
     case "delete_variable_collection": return deleteVariableCollection(input);
+    case "get_library_variable_collections": return await getLibraryVariableCollections();
+    case "get_library_variables_in_collection": return await getLibraryVariablesInCollection(input);
+    case "import_library_variable": return await importLibraryVariable(input);
 
     // Styles
     case "create_text_style": return createTextStyle(input);
@@ -217,6 +293,8 @@ async function handleAction(action, input) {
     case "add_component_property": return addComponentProperty(input);
     case "set_instance_property": return setInstanceProperty(input);
     case "get_component_properties": return getComponentProperties(input);
+
+    case "batch_update_components": return await batchUpdateComponents(input);
 
     default:
       throw new Error("Unknown action: " + action);
@@ -716,6 +794,45 @@ function getNodeInfo({ nodeId }) {
     try { info.effects = serializeEffects(node.effects); } catch (_) {}
   }
 
+  // Constraints
+  if ("constraints" in node) {
+    info.constraints = {
+      horizontal: node.constraints.horizontal,
+      vertical: node.constraints.vertical
+    };
+  }
+
+  // Clips content (for frames)
+  if ("clipsContent" in node) info.clipsContent = node.clipsContent;
+
+  // Layout positioning within auto-layout parent
+  if ("layoutAlign" in node) info.layoutAlign = node.layoutAlign;
+  if ("layoutGrow" in node) info.layoutGrow = node.layoutGrow;
+  if ("layoutPositioning" in node) info.layoutPositioning = node.layoutPositioning;
+
+  // Style IDs (paint styles, text styles, effect styles)
+  if ("fillStyleId" in node && node.fillStyleId && node.fillStyleId !== "") {
+    info.fillStyleId = node.fillStyleId;
+  }
+  if ("strokeStyleId" in node && node.strokeStyleId && node.strokeStyleId !== "") {
+    info.strokeStyleId = node.strokeStyleId;
+  }
+  if ("effectStyleId" in node && node.effectStyleId && node.effectStyleId !== "") {
+    info.effectStyleId = node.effectStyleId;
+  }
+  if ("textStyleId" in node && node.textStyleId && node.textStyleId !== "") {
+    info.textStyleId = node.textStyleId;
+  }
+
+  // Mask
+  if ("isMask" in node) info.isMask = node.isMask;
+
+  // Min/max size
+  if ("minWidth" in node && node.minWidth != null) info.minWidth = node.minWidth;
+  if ("maxWidth" in node && node.maxWidth != null) info.maxWidth = node.maxWidth;
+  if ("minHeight" in node && node.minHeight != null) info.minHeight = node.minHeight;
+  if ("maxHeight" in node && node.maxHeight != null) info.maxHeight = node.maxHeight;
+
   // Auto-layout properties
   if ("layoutMode" in node && node.layoutMode !== "NONE") {
     info.autoLayout = {
@@ -729,7 +846,8 @@ function getNodeInfo({ nodeId }) {
       primaryAxisAlignItems: node.primaryAxisAlignItems,
       counterAxisAlignItems: node.counterAxisAlignItems,
       layoutSizingHorizontal: node.layoutSizingHorizontal,
-      layoutSizingVertical: node.layoutSizingVertical
+      layoutSizingVertical: node.layoutSizingVertical,
+      layoutWrap: node.layoutWrap
     };
   }
 
@@ -773,6 +891,70 @@ function getNodeInfo({ nodeId }) {
     try {
       const propDefs = node.componentPropertyDefinitions;
       if (propDefs && Object.keys(propDefs).length > 0) info.componentPropertyDefinitions = propDefs;
+    } catch (_) {}
+  }
+
+  // Bound variables (library tokens)
+  if ("boundVariables" in node) {
+    try {
+      var bv = node.boundVariables;
+      var bvResult = {};
+      var knownBVKeys = [
+        "fills", "strokes", "effects",
+        "layoutGrids", "componentProperties",
+        "fontSize", "fontFamily", "fontStyle", "fontWeight",
+        "lineHeight", "letterSpacing", "paragraphSpacing", "paragraphIndent",
+        "textCase", "textDecoration",
+        "visible", "opacity",
+        "topLeftRadius", "topRightRadius", "bottomLeftRadius", "bottomRightRadius",
+        "itemSpacing", "counterAxisSpacing",
+        "paddingLeft", "paddingRight", "paddingTop", "paddingBottom",
+        "strokeWeight", "strokeTopWeight", "strokeBottomWeight", "strokeLeftWeight", "strokeRightWeight",
+        "width", "height",
+        "minWidth", "maxWidth", "minHeight", "maxHeight",
+        "characters"
+      ];
+
+      function extractBinding(binding) {
+        if (Array.isArray(binding)) {
+          return binding.map(function(b) {
+            var entry = { type: b.type, id: b.id };
+            try {
+              var v = figma.variables.getVariableById(b.id);
+              if (v) { entry.name = v.name; entry.resolvedType = v.resolvedType; }
+            } catch (_) {}
+            return entry;
+          });
+        } else if (binding && binding.id) {
+          var single = { type: binding.type, id: binding.id };
+          try {
+            var v2 = figma.variables.getVariableById(binding.id);
+            if (v2) { single.name = v2.name; single.resolvedType = v2.resolvedType; }
+          } catch (_) {}
+          return single;
+        }
+        return null;
+      }
+
+      // First try for...in (catches any enumerable keys)
+      for (var key in bv) {
+        var result = extractBinding(bv[key]);
+        if (result != null) bvResult[key] = result;
+      }
+      // Supplement with explicit key access (Figma proxies may not enumerate all keys)
+      for (var ki = 0; ki < knownBVKeys.length; ki++) {
+        var bvKey = knownBVKeys[ki];
+        if (!(bvKey in bvResult)) {
+          try {
+            var val = bv[bvKey];
+            if (val != null) {
+              var r = extractBinding(val);
+              if (r != null) bvResult[bvKey] = r;
+            }
+          } catch (_) {}
+        }
+      }
+      if (Object.keys(bvResult).length > 0) info.boundVariables = bvResult;
     } catch (_) {}
   }
 
@@ -1193,43 +1375,49 @@ function createVariable({ collectionId, name, resolvedType, values, scopes }) {
   };
 }
 
-function getLocalVariableCollections() {
-  const collections = figma.variables.getLocalVariableCollections();
-  return collections.map(c => ({
-    collectionId: c.id,
-    name: c.name,
-    modes: c.modes.map(m => ({ modeId: m.modeId, name: m.name })),
-    variableIds: c.variableIds
-  }));
+async function getLocalVariableCollections() {
+  var collections = await figma.variables.getLocalVariableCollectionsAsync();
+  return collections.map(function(c) {
+    return {
+      collectionId: c.id,
+      name: c.name,
+      modes: c.modes.map(function(m) { return { modeId: m.modeId, name: m.name }; }),
+      variableIds: c.variableIds
+    };
+  });
 }
 
-function getLocalVariables({ collectionId } = {}) {
-  const variables = figma.variables.getLocalVariables();
-  const filtered = collectionId
-    ? variables.filter(v => v.variableCollectionId === collectionId)
+async function getLocalVariables(input) {
+  var collectionId = input != null ? input.collectionId : undefined;
+  var variables = await figma.variables.getLocalVariablesAsync();
+  var filtered = collectionId
+    ? variables.filter(function(v) { return v.variableCollectionId === collectionId; })
     : variables;
 
-  return filtered.map(v => {
-    const valuesByMode = {};
-    const collection = figma.variables.getVariableCollectionById(v.variableCollectionId);
+  var results = [];
+  for (var i = 0; i < filtered.length; i++) {
+    var v = filtered[i];
+    var valuesByMode = {};
+    var collection = await figma.variables.getVariableCollectionByIdAsync(v.variableCollectionId);
     if (collection) {
-      for (const mode of collection.modes) {
-        let val = v.valuesByMode[mode.modeId];
-        // Convert RGB back to hex for COLOR type
+      for (var j = 0; j < collection.modes.length; j++) {
+        var mode = collection.modes[j];
+        var val = v.valuesByMode[mode.modeId];
         if (v.resolvedType === "COLOR" && val && typeof val === "object" && "r" in val) {
           val = rgbToHex(val);
         }
         valuesByMode[mode.modeId] = val;
       }
     }
-    return {
+    results.push({
       variableId: v.id,
       name: v.name,
       resolvedType: v.resolvedType,
       collectionId: v.variableCollectionId,
-      valuesByMode
-    };
-  });
+      valuesByMode: valuesByMode
+    });
+  }
+  return results;
 }
 
 function setVariableValue({ variableId, modeId, value }) {
@@ -1315,6 +1503,36 @@ function deleteVariableCollection({ collectionId }) {
   if (!collection) throw new Error("Variable collection not found: " + collectionId);
   collection.remove();
   return { deleted: collectionId };
+}
+
+// Library variables
+async function getLibraryVariableCollections() {
+  var collections = await figma.teamLibrary.getAvailableLibraryVariableCollectionsAsync();
+  return collections.map(function(c) {
+    return { name: c.name, key: c.key, libraryName: c.libraryName };
+  });
+}
+
+async function getLibraryVariablesInCollection(input) {
+  var collectionKey = input.collectionKey;
+  if (!collectionKey) throw new Error("collectionKey is required");
+  var variables = await figma.teamLibrary.getVariablesInLibraryCollectionAsync(collectionKey);
+  return variables.map(function(v) {
+    return { key: v.key, name: v.name, resolvedType: v.resolvedType };
+  });
+}
+
+async function importLibraryVariable(input) {
+  var key = input.key;
+  if (!key) throw new Error("key is required");
+  var variable = await figma.variables.importVariableByKeyAsync(key);
+  return {
+    variableId: variable.id,
+    key: variable.key,
+    name: variable.name,
+    resolvedType: variable.resolvedType,
+    remote: variable.remote
+  };
 }
 
 // Helper to convert RGB to hex
@@ -1615,5 +1833,230 @@ function getComponentProperties({ componentId }) {
       value: val.value,
       type: val.type
     }))
+  };
+}
+
+// ---------- Batch Update Components ----------
+
+// Helper: set a property as either a raw value or a variable binding.
+// If value is an object with { variableId }, bind that variable.
+// If value is a number/string, set it directly (leaves existing binding intact
+// only if Figma allows — note: setting a raw value on a variable-bound
+// property will implicitly unbind the variable per Figma API behavior).
+function applyValue(node, field, value) {
+  if (value != null && typeof value === "object" && value.variableId) {
+    var v = figma.variables.getVariableById(value.variableId);
+    if (!v) throw new Error("Variable not found: " + value.variableId);
+    node.setBoundVariable(field, v);
+  } else if (value != null) {
+    node[field] = value;
+  }
+}
+
+// Helper: apply a paint (fill/stroke) — raw hex or variable binding
+function applyPaint(node, prop, value) {
+  if (value != null && typeof value === "object" && value.variableId) {
+    var v = figma.variables.getVariableById(value.variableId);
+    if (!v) throw new Error("Variable not found: " + value.variableId);
+    var paint = figma.variables.setBoundVariableForPaint(
+      { type: "SOLID", color: { r: 0, g: 0, b: 0 } }, "color", v
+    );
+    node[prop] = [paint];
+  } else if (typeof value === "string") {
+    // hex string
+    var hex = value.replace("#", "");
+    var r = parseInt(hex.substring(0, 2), 16) / 255;
+    var g = parseInt(hex.substring(2, 4), 16) / 255;
+    var b = parseInt(hex.substring(4, 6), 16) / 255;
+    node[prop] = [{ type: "SOLID", color: { r: r, g: g, b: b } }];
+  }
+}
+
+async function batchUpdateComponents(input) {
+  var componentSetId = input.componentSetId;
+  var rules = input.rules; // Array of rule objects
+  var dryRun = input.dryRun === true;
+
+  var setNode = getNode(componentSetId);
+  if (setNode.type !== "COMPONENT_SET") {
+    throw new Error("Node " + componentSetId + " is not a COMPONENT_SET");
+  }
+
+  var children = setNode.children;
+  var updated = 0;
+  var skipped = 0;
+  var errors = [];
+  var details = [];
+
+  for (var i = 0; i < children.length; i++) {
+    var comp = children[i];
+    if (comp.type !== "COMPONENT") continue;
+
+    // Parse variant properties from name: "Size=md, Hierarchy=Primary, ..."
+    var variantProps = {};
+    var nameParts = comp.name.split(",");
+    for (var p = 0; p < nameParts.length; p++) {
+      var kv = nameParts[p].trim().split("=");
+      if (kv.length === 2) {
+        variantProps[kv[0].trim()] = kv[1].trim();
+      }
+    }
+
+    // Find all matching rules (applied in order, later rules override)
+    var matchedRules = [];
+    for (var r = 0; r < rules.length; r++) {
+      var rule = rules[r];
+      var match = rule.match;
+      var matches = true;
+      if (match) {
+        for (var mk in match) {
+          if (variantProps[mk] !== match[mk]) {
+            matches = false;
+            break;
+          }
+        }
+      }
+      // match === null/undefined/empty means "match all"
+      if (matches) matchedRules.push(rule);
+    }
+
+    if (matchedRules.length === 0) {
+      skipped++;
+      continue;
+    }
+
+    // Merge matched rules (later overrides earlier)
+    var merged = {};
+    for (var mi = 0; mi < matchedRules.length; mi++) {
+      var mr = matchedRules[mi];
+      if (mr.cornerRadius != null) merged.cornerRadius = mr.cornerRadius;
+      if (mr.padding) {
+        if (!merged.padding) merged.padding = {};
+        if (mr.padding.left != null) merged.padding.left = mr.padding.left;
+        if (mr.padding.right != null) merged.padding.right = mr.padding.right;
+        if (mr.padding.top != null) merged.padding.top = mr.padding.top;
+        if (mr.padding.bottom != null) merged.padding.bottom = mr.padding.bottom;
+      }
+      if (mr.itemSpacing != null) merged.itemSpacing = mr.itemSpacing;
+      if (mr.sizing) {
+        if (!merged.sizing) merged.sizing = {};
+        if (mr.sizing.horizontal) merged.sizing.horizontal = mr.sizing.horizontal;
+        if (mr.sizing.vertical) merged.sizing.vertical = mr.sizing.vertical;
+        if (mr.sizing.width != null) merged.sizing.width = mr.sizing.width;
+        if (mr.sizing.height != null) merged.sizing.height = mr.sizing.height;
+      }
+      if (mr.font) {
+        if (!merged.font) merged.font = {};
+        if (mr.font.family) merged.font.family = mr.font.family;
+        if (mr.font.style) merged.font.style = mr.font.style;
+        if (mr.font.size != null) merged.font.size = mr.font.size;
+        if (mr.font.lineHeight != null) merged.font.lineHeight = mr.font.lineHeight;
+      }
+      if (mr.fill != null) merged.fill = mr.fill;
+      if (mr.stroke != null) merged.stroke = mr.stroke;
+      if (mr.strokeWeight != null) merged.strokeWeight = mr.strokeWeight;
+      if (mr.alignment) {
+        if (!merged.alignment) merged.alignment = {};
+        if (mr.alignment.primary) merged.alignment.primary = mr.alignment.primary;
+        if (mr.alignment.counter) merged.alignment.counter = mr.alignment.counter;
+      }
+    }
+
+    if (dryRun) {
+      details.push({ id: comp.id, name: comp.name, matched: matchedRules.length, merged: merged });
+      updated++;
+      continue;
+    }
+
+    try {
+      // Corner radius
+      if (merged.cornerRadius != null) {
+        if (typeof merged.cornerRadius === "object" && merged.cornerRadius.variableId) {
+          var crVar = figma.variables.getVariableById(merged.cornerRadius.variableId);
+          if (crVar) {
+            comp.setBoundVariable("topLeftRadius", crVar);
+            comp.setBoundVariable("topRightRadius", crVar);
+            comp.setBoundVariable("bottomLeftRadius", crVar);
+            comp.setBoundVariable("bottomRightRadius", crVar);
+          }
+        } else {
+          comp.cornerRadius = merged.cornerRadius;
+        }
+      }
+
+      // Padding
+      if (merged.padding) {
+        if (merged.padding.left != null) applyValue(comp, "paddingLeft", merged.padding.left);
+        if (merged.padding.right != null) applyValue(comp, "paddingRight", merged.padding.right);
+        if (merged.padding.top != null) applyValue(comp, "paddingTop", merged.padding.top);
+        if (merged.padding.bottom != null) applyValue(comp, "paddingBottom", merged.padding.bottom);
+      }
+
+      // Item spacing
+      if (merged.itemSpacing != null) applyValue(comp, "itemSpacing", merged.itemSpacing);
+
+      // Fill & stroke
+      if (merged.fill != null && "fills" in comp) applyPaint(comp, "fills", merged.fill);
+      if (merged.stroke != null && "strokes" in comp) applyPaint(comp, "strokes", merged.stroke);
+      if (merged.strokeWeight != null && "strokeWeight" in comp) comp.strokeWeight = merged.strokeWeight;
+
+      // Alignment
+      if (merged.alignment) {
+        if (merged.alignment.primary) comp.primaryAxisAlignItems = merged.alignment.primary;
+        if (merged.alignment.counter) comp.counterAxisAlignItems = merged.alignment.counter;
+      }
+
+      // Sizing mode & resize
+      if (merged.sizing) {
+        if (merged.sizing.horizontal) comp.layoutSizingHorizontal = merged.sizing.horizontal;
+        if (merged.sizing.vertical) comp.layoutSizingVertical = merged.sizing.vertical;
+        if (merged.sizing.width != null || merged.sizing.height != null) {
+          var w = merged.sizing.width != null ? merged.sizing.width : comp.width;
+          var h = merged.sizing.height != null ? merged.sizing.height : comp.height;
+          comp.resize(w, h);
+        }
+      }
+
+      // Font (applies to all TEXT descendants)
+      if (merged.font) {
+        var family = merged.font.family;
+        var style = merged.font.style;
+        if (family && style) {
+          await figma.loadFontAsync({ family: family, style: style });
+        }
+        var textNodes = comp.findAll(function(n) { return n.type === "TEXT"; });
+        for (var ti = 0; ti < textNodes.length; ti++) {
+          var tn = textNodes[ti];
+          try {
+            if (family && style) {
+              await figma.loadFontAsync({ family: family, style: style });
+              tn.fontName = { family: family, style: style };
+            }
+            if (merged.font.size != null) tn.fontSize = merged.font.size;
+            if (merged.font.lineHeight != null) {
+              tn.lineHeight = { value: merged.font.lineHeight, unit: "PIXELS" };
+            }
+          } catch (fontErr) {
+            errors.push("Font error on " + tn.id + ": " + fontErr.message);
+          }
+        }
+      }
+
+      details.push({ id: comp.id, name: comp.name, action: "updated" });
+      updated++;
+    } catch (err) {
+      errors.push(comp.id + " (" + comp.name + "): " + (err.message || String(err)));
+    }
+  }
+
+  return {
+    componentSetId: componentSetId,
+    componentSetName: setNode.name,
+    totalChildren: children.length,
+    updated: updated,
+    skipped: skipped,
+    errorCount: errors.length,
+    errors: errors.length <= 10 ? errors : errors.slice(0, 10).concat(["... and " + (errors.length - 10) + " more"]),
+    details: details.length <= 30 ? details : details.slice(0, 30).concat([{ note: "... and " + (details.length - 30) + " more" }])
   };
 }
